@@ -1,0 +1,23 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
+dist/
+build/
+*.spec
+
+# IDEs
+.vscode/
+.idea/
+
+# Data & Output
+*.xlsx
+*.xls
+*.csv
+*.pdf
+# (Except templates if any, but currently none marked as such)
+
+# OS
+.DS_Store
+Thumbs.db
