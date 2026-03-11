@@ -38,6 +38,10 @@ class ContainerRecord:
     port_of_discharge: str = ""      # Extra context
     consignee: str = ""              # Extra context
     hs_codes: list[str] = field(default_factory=list)
+    user: str = ""                   # Global manual input
+    user_month: str = ""             # Global manual input
+    pre_alert_date: str = ""         # Global manual input
+    vessel_eta: str = ""             # Global manual input
 
 
 def parse_bl(pdf_path: str | Path) -> list[ContainerRecord]:
@@ -77,12 +81,13 @@ def _parse_maersk(text: str, filename: str) -> list[ContainerRecord]:
 
     base = ContainerRecord(shipping_line="MAERSK")
 
-    # BL Number — from filename or text
+    # BL Number — from filename or text (strip MAEU prefix)
     bl_match = re.search(r"B/L[:\s]*(\d{9,})", text)
     if bl_match:
-        base.bl_no = f"MAEU{bl_match.group(1)}"
-    elif re.match(r"(?:MAEU)?\d{9}", filename):
-        base.bl_no = filename if filename.startswith("MAEU") else f"MAEU{filename}"
+        base.bl_no = bl_match.group(1)
+    elif re.match(r"(?:MAEU)?(\d{9})", filename.upper()):
+        match = re.match(r"(?:MAEU)?(\d{9})", filename.upper())
+        base.bl_no = match.group(1) if match else filename
 
     # Vessel
     vessel_match = re.search(r"Vessel\s*\n\s*(.+?)(?:\n|Voyage)", text, re.DOTALL)
@@ -106,7 +111,7 @@ def _parse_maersk(text: str, filename: str) -> list[ContainerRecord]:
 
     # Shipper (Supplier) — look for known shipper names
     if re.search(r"VOLKSWAGEN\s+KONZERNLOGISTIK", text, re.IGNORECASE):
-        base.supplier_name = "VOLKSWAGEN KONZERNLOGISTIK GMBH & CO.OHG"
+        base.supplier_name = "VOLKSWAGEN KONZERNLOGISTIK GMBH & CO.OHG AS AGENT OF SKODA AUTO A.S."
     elif re.search(r"SKODA\s+AUTO\s+A\.?S\.?", text, re.IGNORECASE):
         base.supplier_name = "SKODA AUTO A.S."
 
@@ -286,7 +291,7 @@ def _parse_hapag(text: str, filename: str) -> list[ContainerRecord]:
 
     # Shipper
     if re.search(r"VOLKSWAGEN\s+KONZERNLOGISTIK", text, re.IGNORECASE):
-        base.supplier_name = "VOLKSWAGEN KONZERNLOGISTIK GMBH & CO.OHG"
+        base.supplier_name = "VOLKSWAGEN KONZERNLOGISTIK GMBH & CO.OHG AS AGENT OF SKODA AUTO A.S."
     elif re.search(r"SKODA\s+AUTO\s+A\.?S\.?", text, re.IGNORECASE):
         base.supplier_name = "SKODA AUTO A.S."
 

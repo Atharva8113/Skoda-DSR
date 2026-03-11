@@ -6,10 +6,13 @@ __pycache__/
 dist/
 build/
 *.spec
-
+*.json
 # IDEs
 .vscode/
 .idea/
+*.mp4
+setup_zoho_env.py
+zoho_api.py
 
 # Data & Output
 *.xlsx

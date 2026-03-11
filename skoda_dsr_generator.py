@@ -31,6 +31,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from PIL import Image, ImageTk
 
 from bl_parser import ContainerRecord, parse_bl
+from zoho_api import ZohoCreatorAPI
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -202,6 +203,114 @@ class ToolTip:
         if tw:
             tw.destroy()
 
+class DataPreviewWindow(tk.Toplevel):
+    def __init__(self, parent, records: list[ContainerRecord], on_confirm):
+        super().__init__(parent)
+        self.title("Review & Edit Extracted Data")
+        self.geometry("1400x650")
+        self.configure(bg=WHITE)
+        self.records = records
+        self.on_confirm = on_confirm
+        
+        self.transient(parent)
+        self.grab_set()
+        
+        header = tk.Frame(self, bg=WHITE, height=60)
+        header.pack(fill="x", side="top")
+        tk.Label(header, text="Review & Edit Data", font=("Segoe UI", 16, "bold"), bg=WHITE, fg=BTN_BLUE).pack(pady=5)
+        tk.Label(header, text="Double-click any cell to edit details per row.", font=("Segoe UI", 10), bg=WHITE, fg="#6c757d").pack(pady=2)
+
+        frame = tk.Frame(self, bg=WHITE)
+        frame.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        self.col_map = [
+            ("user", "User", 90),
+            ("user_month", "Month", 60),
+            ("pre_alert_date", "Pre-Alert", 90),
+            ("vessel_eta", "Vessel ETA", 90),
+            ("bl_no", "BL No", 100),
+            ("container_no", "Container No", 100),
+            ("invoice_nos", "Invoice Nos", 180),
+            ("supplier_name", "Supplier", 180),
+            ("inco_terms", "INCO", 70),
+            ("num_packages", "Packages", 80),
+            ("gross_weight", "Gross Wt", 80),
+            ("container_size", "Size", 50),
+            ("container_type", "Type", 50),
+            ("vessel_name", "Vessel Name", 120),
+            ("port_of_loading", "POL", 100),
+            ("shipping_line", "Line", 100),
+            ("bl_date", "BL Date", 90)
+        ]
+        
+        cols = [c[1] for c in self.col_map]
+        self.tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
+        
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        
+        vsb.pack(side="right", fill="y")
+        hsb.pack(side="bottom", fill="x")
+        self.tree.pack(side="left", fill="both", expand=True)
+        
+        for attr, heading, w in self.col_map:
+            self.tree.heading(heading, text=heading)
+            self.tree.column(heading, width=w, stretch=False, anchor="w")
+            
+        for rec in self.records:
+            vals = [getattr(rec, attr) for attr, _, _ in self.col_map]
+            self.tree.insert("", "end", values=vals)
+            
+        self.tree.bind("<Double-1>", self._on_double_click)
+        
+        footer = tk.Frame(self, bg=WHITE, height=50)
+        footer.pack(fill="x", side="bottom", padx=20, pady=10)
+        
+        tk.Button(
+            footer, text="Cancel", font=("Segoe UI", 10), width=15, 
+            command=self.destroy
+        ).pack(side="left")
+        
+        tk.Button(
+            footer, text="Confirm & Submit", font=("Segoe UI", 10, "bold"),
+            bg=BTN_BLUE, fg=WHITE, width=20, cursor="hand2",
+            command=self._do_confirm
+        ).pack(side="right")
+        
+    def _on_double_click(self, event):
+        row_id = self.tree.identify_row(event.y)
+        col_id = self.tree.identify_column(event.x)
+        if not row_id or not col_id:
+            return
+            
+        x, y, width, height = self.tree.bbox(row_id, col_id)
+        col_idx = int(col_id[1:]) - 1
+        
+        value = self.tree.item(row_id, "values")[col_idx]
+        
+        entry = ttk.Entry(self.tree, font=("Segoe UI", 9))
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.insert(0, value)
+        entry.focus()
+        
+        def commit(e=None):
+            new_val = entry.get()
+            vals = list(self.tree.item(row_id, "values"))
+            vals[col_idx] = new_val
+            self.tree.item(row_id, values=vals)
+            
+            rec_idx = self.tree.index(row_id)
+            attr_name = self.col_map[col_idx][0]
+            setattr(self.records[rec_idx], attr_name, new_val)
+            entry.destroy()
+            
+        entry.bind("<Return>", commit)
+        entry.bind("<FocusOut>", commit)
+        
+    def _do_confirm(self):
+        self.destroy()
+        self.on_confirm()
 
 class DSRGeneratorApp:
     def __init__(self, root: tk.Tk) -> None:
@@ -298,8 +407,9 @@ class DSRGeneratorApp:
         
         # User
         tk.Label(inner, text="User:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=0, sticky="w", padx=5)
-        self.var_user = tk.StringVar()
-        tk.Entry(inner, textvariable=self.var_user, width=30).grid(row=0, column=1, sticky="w", padx=5)
+        self.var_user = tk.StringVar(value="Ashish(CSN)")
+        self.cb_user = ttk.Combobox(inner, textvariable=self.var_user, values=["Ashish(CSN)", "Ranjit(PUNE)"], width=27)
+        self.cb_user.grid(row=0, column=1, sticky="w", padx=5)
         
         # Pre-alert Date (custom pop-up)
         tk.Label(inner, text="Pre-alert Receive Date:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=2, sticky="w", padx=(20, 5))
@@ -345,6 +455,9 @@ class DSRGeneratorApp:
         self.var_out_filename = tk.StringVar(value=f"SKODA_DSR_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
         tk.Entry(inner, textvariable=self.var_out_filename, width=100).grid(row=2, column=1, padx=5, pady=2)
         tk.Label(inner, text="(.xlsx added automatically)", font=("Segoe UI", 8), fg="#6c757d", bg=WHITE).grid(row=2, column=2, sticky="w", padx=5, pady=2)
+        
+        self.var_push_zoho = tk.BooleanVar(value=True)
+        tk.Checkbutton(inner, text="Push Data to Zoho Creator API", font=("Segoe UI", 9, "bold"), bg=WHITE, variable=self.var_push_zoho).grid(row=3, column=1, sticky="w", padx=5, pady=10)
 
     def _build_preview(self) -> None:
         frame = ttk.LabelFrame(self.root, text="Data Preview / Processing Queue", padding=(10, 8))
@@ -452,37 +565,15 @@ class DSRGeneratorApp:
         for directory, files in self.files_by_dir.items():
             # Identify BL vs Invoice
             bl_files = []
-            invoice_stems = []
+            invoice_pdf_files = []
             
             for f in files:
                 stem_upper = f.stem.upper()
                 if stem_upper.startswith("MAEU") or stem_upper.startswith("HLCU") or stem_upper == "BL" or stem_upper.startswith("MEAU"):
                     bl_files.append(f)
                 else:
-                    # Anything else is an invoice. The filename (stem) is the invoice number.
-                    # Some files might have spaces or weird characters, we just take the first digit block or the whole stem.
-                    # It's safest to just use the filename stem directly, maybe split on space if it's like "59638681 AL ZUBARA"
-                    # Look specifically for an 8-digit number starting with 4 or 5 (VW/Skoda/Audi format)
-                    import re
-                    matches = re.findall(r"\b([45]\d{7})\b", f.stem)
-                    if matches:
-                        invoice_stems.extend(matches)
-                    else:
-                        invoice_stems.append(f.stem)
+                    invoice_pdf_files.append(f)
             
-            # Deduplicate invoices
-            invoice_stems = list(dict.fromkeys(invoice_stems))
-            invoices_str = "/".join(invoice_stems)
-
-            status = "Parsed"
-            containers_str = "-"
-            bl_no = "-"
-
-            if not bl_files:
-                status = "Error: No BL found"
-                self.tree.insert("", "end", values=(directory.name, f"{len(files)} files", status, containers_str, invoices_str, bl_no))
-                continue
-
             # Parse BLs
             dir_records = []
             for bl_file in bl_files:
@@ -493,11 +584,64 @@ class DSRGeneratorApp:
                     logger.error(f"Error parsing {bl_file.name}: {e}")
                     status = f"Error parsing BL"
             
-            # Override invoice numbers from actual files if present
-            # Only override if we actually found invoice PDFs, otherwise keep what parser got
-            if invoice_stems:
+            import fitz
+            import re
+            
+            container_to_invoices = {rec.container_no.upper(): set() for rec in dir_records}
+            unmapped_invoices = set()
+            all_invoice_stems = []
+            
+            for inv_f in invoice_pdf_files:
+                matches = re.findall(r"\b([45]\d{7})\b", inv_f.stem)
+                inv_no = matches[0] if matches else inv_f.stem
+                all_invoice_stems.append(inv_no)
+                
+                try:
+                    doc = fitz.open(str(inv_f))
+                    text_all = "".join(page.get_text().upper() for page in doc)
+                    doc.close()
+                    
+                    found_containers = set(re.findall(r"\b([A-Z]{4}\d{7})\b", text_all))
+                    mapped = False
+                    for c_no in found_containers:
+                        if c_no in container_to_invoices:
+                            container_to_invoices[c_no].add(inv_no)
+                            mapped = True
+                    
+                    if not mapped:
+                        unmapped_invoices.add(inv_no)
+                        
+                except Exception as e:
+                    logger.error(f"Error parsing invoice {inv_f.name}: {e}")
+                    unmapped_invoices.add(inv_no)
+
+            all_invoice_stems = list(dict.fromkeys(all_invoice_stems))
+            invoices_str = "/".join(all_invoice_stems)
+
+            status = "Parsed"
+            containers_str = "-"
+            bl_no = "-"
+
+            if not bl_files:
+                status = "Error: No BL found"
+                self.tree.insert("", "end", values=(directory.name, f"{len(files)} files", status, containers_str, invoices_str, bl_no))
+                continue
+                
+            # Apply invoice mappings to the parsed base records
+            if invoice_pdf_files:
                 for rec in dir_records:
-                    rec.invoice_nos = invoices_str
+                    cno = rec.container_no.upper()
+                    mapped_set = container_to_invoices.get(cno, set())
+                    
+                    if mapped_set:
+                        # Exclusively use invoices mapped specifically to this container
+                        rec.invoice_nos = "/".join(sorted(list(mapped_set)))
+                    else:
+                        # Fallback: Assign unmapped invoices or all invoices if we couldn't confidently tie them
+                        if unmapped_invoices:
+                            rec.invoice_nos = "/".join(sorted(list(unmapped_invoices)))
+                        else:
+                            rec.invoice_nos = invoices_str
 
             self.parsed_records.extend(dir_records)
 
@@ -519,20 +663,23 @@ class DSRGeneratorApp:
         if not self.parsed_records:
             messagebox.showwarning("No Data", "No valid parsed container records to generate DSR.")
             return
-
-        user = self.var_user.get().strip()
-        user_month = self.var_month.get().strip()
-        pre_alert_str = self.cal_pre_alert.get()
-        vessel_eta_str = self.cal_vessel_eta.get()
-
-        pre_alert = None
-        if pre_alert_str:
-            pre_alert = datetime.strptime(pre_alert_str, "%Y-%m-%d")
+            
+        # Before spawning preview, explicitly assign global manual settings to ALL the records
+        global_user = self.var_user.get().strip()
+        global_month = self.var_month.get().strip()
+        global_pre = self.cal_pre_alert.get()
+        global_eta = self.cal_vessel_eta.get()
         
-        vessel_eta = None
-        if vessel_eta_str:
-            vessel_eta = datetime.strptime(vessel_eta_str, "%Y-%m-%d")
+        for r in self.parsed_records:
+            r.user = global_user
+            r.user_month = global_month
+            r.pre_alert_date = global_pre
+            r.vessel_eta = global_eta
 
+        # Pop up the Data Preview modal. Only if they confirm do we proceed.
+        DataPreviewWindow(self.root, self.parsed_records, self._process_generation)
+
+    def _process_generation(self) -> None:
         out_name = self.var_out_filename.get().strip()
         if not out_name.endswith(".xlsx"):
             out_name += ".xlsx"
@@ -546,11 +693,27 @@ class DSRGeneratorApp:
         try:
             if self.master_dsr_path and self.master_dsr_path.exists():
                 # Append directly to the master file in its original location
-                self._append_to_master(self.master_dsr_path, user, user_month, pre_alert, vessel_eta)
-                messagebox.showinfo("Success", f"DSR data appended successfully to Master file!\n\nAppended to: {self.master_dsr_path.name}")
+                self._append_to_master(self.master_dsr_path)
+                excel_msg = f"DSR data appended successfully to Master file!\n\nAppended to: {self.master_dsr_path.name}"
             else:
-                self._create_new_dsr(save_path, user, user_month, pre_alert, vessel_eta)
-                messagebox.showinfo("Success", f"DSR generated successfully!\n\nSaved to: {save_path.name}")
+                self._create_new_dsr(save_path)
+                excel_msg = f"DSR generated successfully!\n\nSaved to: {save_path.name}"
+            
+            # API Push
+            zoho_msg = ""
+            if self.var_push_zoho.get():
+                try:
+                    zoho = ZohoCreatorAPI()
+                    success, msg = zoho.push_records(self.parsed_records)
+                    if success:
+                        zoho_msg = f"\n\nZoho API: {msg}"
+                    else:
+                        zoho_msg = f"\n\nZoho API Warning: {msg}"
+                except Exception as ze:
+                    zoho_msg = f"\n\nZoho API Error: {ze}"
+            
+            messagebox.showinfo("Success", excel_msg + zoho_msg)
+
         except Exception as exc:
             logger.exception("Failed to generate DSR")
             err_msg = str(exc)
@@ -561,11 +724,20 @@ class DSRGeneratorApp:
 
     # ── Excel Export Logic ───────────────────────────────────────────────
 
-    def _record_to_row(self, rec: ContainerRecord, user: str, month: str, pre_alert: Optional[datetime], vessel_eta: Optional[datetime]) -> list:
+    def _record_to_row(self, rec: ContainerRecord) -> list:
         row = [""] * len(DSR_HEADERS)
-        row[0] = user
-        row[1] = pre_alert
-        row[2] = month
+        
+        # Format the user-editable dates on-the-fly for Excel (using datetime objects looks better in Excel)
+        def _parse_dt(dt_str):
+            if not dt_str: return None
+            try: return datetime.strptime(dt_str, "%Y-%m-%d")
+            except: 
+                try: return datetime.strptime(dt_str, "%d-%b-%Y")
+                except: return dt_str
+
+        row[0] = rec.user
+        row[1] = _parse_dt(rec.pre_alert_date)
+        row[2] = rec.user_month
         row[3] = rec.shipping_line
         row[4] = rec.port_of_loading
         row[5] = rec.vessel_name
@@ -578,7 +750,7 @@ class DSRGeneratorApp:
             pass
         row[6] = bl_dt if bl_dt else rec.bl_date
 
-        row[7] = vessel_eta
+        row[7] = _parse_dt(rec.vessel_eta)
         row[9] = rec.container_no
         row[10] = rec.container_size
         row[11] = rec.container_type
@@ -611,7 +783,7 @@ class DSRGeneratorApp:
         ws.row_dimensions[1].height = 40
         ws.freeze_panes = "A2"
 
-    def _create_new_dsr(self, save_path: Path, user: str, month: str, pre_alert: Optional[datetime], vessel_eta: Optional[datetime]) -> None:
+    def _create_new_dsr(self, save_path: Path) -> None:
         wb = openpyxl.Workbook()
         ws_live = wb.active
         ws_live.title = "Live shipments"
@@ -622,7 +794,7 @@ class DSRGeneratorApp:
         thin_border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
 
         for row_idx, rec in enumerate(self.parsed_records, 2):
-            row_data = self._record_to_row(rec, user, month, pre_alert, vessel_eta)
+            row_data = self._record_to_row(rec)
             for col_idx, value in enumerate(row_data, 1):
                 cell = ws_live.cell(row=row_idx, column=col_idx, value=value)
                 cell.font = data_font
@@ -642,7 +814,7 @@ class DSRGeneratorApp:
         wb.save(save_path)
         wb.close()
 
-    def _append_to_master(self, master_path: Path, user: str, month: str, pre_alert: Optional[datetime], vessel_eta: Optional[datetime]) -> None:
+    def _append_to_master(self, master_path: Path) -> None:
         wb = openpyxl.load_workbook(master_path)
 
         sheet_name = next((name for name in wb.sheetnames if "live" in name.lower()), wb.sheetnames[0])
@@ -654,7 +826,7 @@ class DSRGeneratorApp:
         thin_border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
 
         for rec in self.parsed_records:
-            row_data = self._record_to_row(rec, user, month, pre_alert, vessel_eta)
+            row_data = self._record_to_row(rec)
             for col_idx, value in enumerate(row_data, 1):
                 cell = ws.cell(row=next_row, column=col_idx, value=value)
                 cell.font = data_font
