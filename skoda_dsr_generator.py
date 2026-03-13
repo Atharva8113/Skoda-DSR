@@ -11,6 +11,7 @@ Features:
 
 from __future__ import annotations
 
+import re
 import logging
 import os
 import sys
@@ -23,11 +24,15 @@ from typing import Optional
 try:
     from tkcalendar import Calendar
 except ImportError:
-    messagebox.showerror("Missing Dependency", "Please run: pip install tkcalendar")
-    sys.exit(1)
+    # This will still show red if the IDE doesn't see the package, 
+    # but the runtime check is here.
+    Calendar = None 
 
+import fitz  # PyMuPDF
 import openpyxl
+import openpyxl.utils
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.worksheet.worksheet import Worksheet
 from PIL import Image, ImageTk
 
 from bl_parser import ContainerRecord, parse_bl
@@ -136,6 +141,11 @@ class BetterDateEntry(tk.Frame):
         frame = tk.Frame(top, highlightbackground="#0056b3", highlightthickness=2)
         frame.pack()
         
+        if not Calendar:
+            messagebox.showerror("Missing Dependency", "Please run: pip install tkcalendar")
+            top.destroy()
+            return
+
         cal = Calendar(frame, selectmode="day", date_pattern="yyyy-mm-dd", showweeknumbers=False, 
                        font=("Segoe UI", 9), background="#0056b3", foreground="white",
                        headersbackground="#F8F9FA", headersforeground="black")
@@ -228,6 +238,8 @@ class DataPreviewWindow(tk.Toplevel):
             ("user_month", "Month", 60),
             ("pre_alert_date", "Pre-Alert", 90),
             ("vessel_eta", "Vessel ETA", 90),
+            ("bl_type", "BL Type", 80),
+            ("bl_mode", "Mode", 80),
             ("bl_no", "BL No", 100),
             ("container_no", "Container No", 100),
             ("invoice_nos", "Invoice Nos", 180),
@@ -342,8 +354,8 @@ class DSRGeneratorApp:
         self._build_file_selection()
         self._build_manual_settings()
         self._build_output_settings()
-        self._build_preview()
         self._build_footer()
+        self._build_preview()
 
     def _load_logo(self) -> None:
         self.logo_img = None
@@ -407,8 +419,8 @@ class DSRGeneratorApp:
         
         # User
         tk.Label(inner, text="User:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=0, sticky="w", padx=5)
-        self.var_user = tk.StringVar(value="Ashish(CSN)")
-        self.cb_user = ttk.Combobox(inner, textvariable=self.var_user, values=["Ashish(CSN)", "Ranjit(PUNE)"], width=27)
+        self.var_user = tk.StringVar(value="Ashish (CSN)")
+        self.cb_user = ttk.Combobox(inner, textvariable=self.var_user, values=["Ashish (CSN)", "Ranjit (PUNE)"], width=27)
         self.cb_user.grid(row=0, column=1, sticky="w", padx=5)
         
         # Pre-alert Date (custom pop-up)
@@ -428,6 +440,26 @@ class DSRGeneratorApp:
         self.var_month = tk.StringVar()
         self.cb_month = ttk.Combobox(inner, textvariable=self.var_month, values=list(MONTH_MAP.values()), width=6, state="readonly")
         self.cb_month.grid(row=0, column=7, sticky="w", padx=5)
+        
+        # BL Type Radio buttons
+        tk.Label(inner, text="BL Type:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=8, sticky="w", padx=(20, 5))
+        self.var_bl_type = tk.StringVar(value="MAWB_MBL")
+        rb_frame = tk.Frame(inner, bg=WHITE)
+        rb_frame.grid(row=0, column=9, sticky="w")
+        tk.Radiobutton(rb_frame, text="MBL", variable=self.var_bl_type, value="MAWB_MBL", bg=WHITE, font=("Segoe UI", 9)).pack(side="left")
+        tk.Radiobutton(rb_frame, text="HBL", variable=self.var_bl_type, value="HAWB_HBL", bg=WHITE, font=("Segoe UI", 9)).pack(side="left")
+        
+        # Mode Dropdown
+        tk.Label(inner, text="Mode:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.var_mode = tk.StringVar(value="Sea (FCL)")
+        self.cb_mode = ttk.Combobox(inner, textvariable=self.var_mode, values=["Air", "Sea (FCL)", "Sea (LCL)", "Sea (BB)"], width=15, state="readonly")
+        self.cb_mode.grid(row=1, column=1, sticky="w", padx=5, pady=5)
+
+        # Branch (Locked to MUMBAI)
+        tk.Label(inner, text="Branch:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=1, column=2, sticky="w", padx=(20, 5), pady=5)
+        self.var_branch = tk.StringVar(value="MUMBAI")
+        self.entry_branch = ttk.Entry(inner, textvariable=self.var_branch, width=15, state="readonly")
+        self.entry_branch.grid(row=1, column=3, sticky="w", padx=5, pady=5)
 
     def _build_output_settings(self) -> None:
         frame = ttk.LabelFrame(self.root, text="Output Settings", padding=(10, 8))
@@ -569,7 +601,9 @@ class DSRGeneratorApp:
             
             for f in files:
                 stem_upper = f.stem.upper()
-                if stem_upper.startswith("MAEU") or stem_upper.startswith("HLCU") or stem_upper == "BL" or stem_upper.startswith("MEAU"):
+                if (stem_upper.startswith("MAEU") or stem_upper.startswith("HLCU") 
+                    or stem_upper == "BL" or stem_upper.startswith("MEAU")
+                    or stem_upper.startswith("SWB")):
                     bl_files.append(f)
                 else:
                     invoice_pdf_files.append(f)
@@ -584,15 +618,17 @@ class DSRGeneratorApp:
                     logger.error(f"Error parsing {bl_file.name}: {e}")
                     status = f"Error parsing BL"
             
-            import fitz
-            import re
-            
             container_to_invoices = {rec.container_no.upper(): set() for rec in dir_records}
+            container_to_supplier = {}
             unmapped_invoices = set()
+            unmapped_supplier = None  # Supplier detected from invoices that have no container numbers
             all_invoice_stems = []
             
             for inv_f in invoice_pdf_files:
                 matches = re.findall(r"\b([45]\d{7})\b", inv_f.stem)
+                # Also try 8-digit numbers starting with 7 or 8 (Skoda AS format)
+                if not matches:
+                    matches = re.findall(r"\b(\d{8})\b", inv_f.stem)
                 inv_no = matches[0] if matches else inv_f.stem
                 all_invoice_stems.append(inv_no)
                 
@@ -602,14 +638,31 @@ class DSRGeneratorApp:
                     doc.close()
                     
                     found_containers = set(re.findall(r"\b([A-Z]{4}\d{7})\b", text_all))
+                    
+                    # Detect Supplier from Invoice Content
+                    detected_supplier = None
+                    if "AUDI HUNGARIA" in text_all:
+                        detected_supplier = "AUDI HUNGARIA ZRT."
+                    elif "VOLKSWAGEN AG" in text_all:
+                        detected_supplier = "VOLKSWAGEN AG"
+                    elif "AUDI AG" in text_all:
+                        detected_supplier = "AUDI AG"
+                    elif "SKODA AUTO" in text_all or "CELKOV" in text_all or "IN SEA" in inv_f.stem.upper():
+                        detected_supplier = "Skoda Auto A.S."
+
                     mapped = False
                     for c_no in found_containers:
                         if c_no in container_to_invoices:
                             container_to_invoices[c_no].add(inv_no)
+                            if detected_supplier:
+                                container_to_supplier[c_no] = detected_supplier
                             mapped = True
                     
                     if not mapped:
+                        # Invoice has no matching container (e.g. Skoda AS invoices)
                         unmapped_invoices.add(inv_no)
+                        if detected_supplier:
+                            unmapped_supplier = detected_supplier
                         
                 except Exception as e:
                     logger.error(f"Error parsing invoice {inv_f.name}: {e}")
@@ -633,11 +686,22 @@ class DSRGeneratorApp:
                     cno = rec.container_no.upper()
                     mapped_set = container_to_invoices.get(cno, set())
                     
+                    # Update Supplier from container-specific invoice mapping first
+                    if cno in container_to_supplier:
+                        rec.supplier_name = container_to_supplier[cno]
+                    elif unmapped_supplier:
+                        # Fallback: Use supplier from unmapped invoices (e.g. Skoda AS with no containers)
+                        rec.supplier_name = unmapped_supplier
+                    
                     if mapped_set:
                         # Exclusively use invoices mapped specifically to this container
-                        rec.invoice_nos = "/".join(sorted(list(mapped_set)))
+                        all_for_container = sorted(list(mapped_set))
+                        # Also append unmapped invoices to each container
+                        if unmapped_invoices:
+                            all_for_container = sorted(list(mapped_set | unmapped_invoices))
+                        rec.invoice_nos = "/".join(all_for_container)
                     else:
-                        # Fallback: Assign unmapped invoices or all invoices if we couldn't confidently tie them
+                        # No container-specific mapping: assign all unmapped or all invoices
                         if unmapped_invoices:
                             rec.invoice_nos = "/".join(sorted(list(unmapped_invoices)))
                         else:
@@ -669,12 +733,16 @@ class DSRGeneratorApp:
         global_month = self.var_month.get().strip()
         global_pre = self.cal_pre_alert.get()
         global_eta = self.cal_vessel_eta.get()
+        global_bl_type = self.var_bl_type.get()
+        global_bl_mode = self.var_mode.get()
         
         for r in self.parsed_records:
             r.user = global_user
             r.user_month = global_month
             r.pre_alert_date = global_pre
             r.vessel_eta = global_eta
+            r.bl_type = global_bl_type
+            r.bl_mode = global_bl_mode
 
         # Pop up the Data Preview modal. Only if they confirm do we proceed.
         DataPreviewWindow(self.root, self.parsed_records, self._process_generation)
@@ -767,7 +835,7 @@ class DSRGeneratorApp:
 
         return row
 
-    def _style_header_row(self, ws: openpyxl.worksheet.worksheet.Worksheet) -> None:
+    def _style_header_row(self, ws: Worksheet) -> None:
         header_font = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF")
         header_fill = PatternFill("solid", fgColor="1B3A5C")
         header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)

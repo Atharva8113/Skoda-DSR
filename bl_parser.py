@@ -42,6 +42,8 @@ class ContainerRecord:
     user_month: str = ""             # Global manual input
     pre_alert_date: str = ""         # Global manual input
     vessel_eta: str = ""             # Global manual input
+    bl_type: str = ""                # Global manual input
+    bl_mode: str = ""                # Global manual input
 
 
 def parse_bl(pdf_path: str | Path) -> list[ContainerRecord]:
@@ -132,12 +134,15 @@ def _parse_maersk(text: str, filename: str) -> list[ContainerRecord]:
 
     # ── Extract container blocks ─────────────────────────────────────────
     # Pattern: Container line like "TCLU9480892  40 DRY 9'6  52 PACKAGES  16484.633 KGS"
+    # Also matches PALLETS (used in Skoda AS / After Sales BLs)
+    # And handles optional seal numbers between container number and size
     container_pattern = re.compile(
         r"([A-Z]{4}\d{7})\s+"           # Container No
+        r"(?:[\w-]+\s+)?"                # Optional Seal/Extra Info (e.g. ML-DE2359372)
         r"(\d{2})\s+"                    # Size (20/40)
         r"(DRY|HIGH\s*CUBE|REEFER)\s+"   # Type keyword
         r"(?:9'6\s+)?"                   # Optional height
-        r"(\d+)\s+PACKAGES?\s+"          # Package count
+        r"(\d+)\s+(?:PACKAGES?|PALLETS?)\s+"  # Package/Pallet count
         r"([\d.,]+)\s+KGS",             # Weight
         re.IGNORECASE
     )
@@ -179,7 +184,7 @@ def _parse_maersk(text: str, filename: str) -> list[ContainerRecord]:
         elif "REEFER" in type_raw:
             ctype = "RF"
         else:
-            ctype = "DV"
+            ctype = "SD"  # Standard container (changed from DV) # Standard/Dry container
 
         if cno not in seen_containers:
             rec = ContainerRecord(
@@ -344,7 +349,7 @@ def _parse_hapag(text: str, filename: str) -> list[ContainerRecord]:
     # Also try: "40'X9'6" HIGH CUBE" pattern for size/type
     size_match = re.search(r"(\d{2})'[Xx](?:8'6\"|9'6\")\s*(HIGH\s*CUBE|STANDARD)?", text)
     default_size = "40"
-    default_type = "DV"
+    default_type = "SD" # Standard dryer container (changed from DV)
     if size_match:
         default_size = size_match.group(1)
         if size_match.group(2) and "HIGH" in size_match.group(2).upper():
