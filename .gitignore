@@ -20,7 +20,7 @@ zoho_api.py
 *.csv
 *.pdf
 # (Except templates if any, but currently none marked as such)
-
+*.zip
 # OS
 .DS_Store
 Thumbs.db

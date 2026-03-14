@@ -42,6 +42,7 @@ from zoho_api import ZohoCreatorAPI
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 LOGO_PATH = SCRIPT_DIR / "Nagarkot Logo.png"
+MASTER_FILE_PATH = SCRIPT_DIR / "SKODA_MASTER_DSR.xlsx"
 
 # DSR column headers in order (A → BF = 58 columns)
 DSR_HEADERS: list[str] = [
@@ -347,13 +348,12 @@ class DSRGeneratorApp:
         # State
         self.files_by_dir: dict[Path, list[Path]] = {}
         self.parsed_records: list[ContainerRecord] = []
-        self.master_dsr_path: Optional[Path] = None
-
+        self.confirmed_records: list[ContainerRecord] = []
+        self.master_dsr_path: Path = MASTER_FILE_PATH
         self._load_logo()
         self._build_header()
         self._build_file_selection()
         self._build_manual_settings()
-        self._build_output_settings()
         self._build_footer()
         self._build_preview()
 
@@ -461,35 +461,6 @@ class DSRGeneratorApp:
         self.entry_branch = ttk.Entry(inner, textvariable=self.var_branch, width=15, state="readonly")
         self.entry_branch.grid(row=1, column=3, sticky="w", padx=5, pady=5)
 
-    def _build_output_settings(self) -> None:
-        frame = ttk.LabelFrame(self.root, text="Output Settings", padding=(10, 8))
-        frame.pack(fill="x", padx=20, pady=5)
-        
-        inner = tk.Frame(frame, bg=WHITE)
-        inner.pack(fill="x")
-        
-        tk.Label(inner, text="Master DSR (optional):", font=("Segoe UI", 9), bg=WHITE).grid(row=0, column=0, sticky="w", padx=5, pady=2)
-        
-        self.var_master_dsr = tk.StringVar()
-        entry_master = tk.Entry(inner, textvariable=self.var_master_dsr, width=100)
-        entry_master.grid(row=0, column=1, padx=5, pady=2)
-        entry_master.config(state="readonly")
-        
-        tk.Button(inner, text="Browse...", width=10, command=self._on_browse_master).grid(row=0, column=2, padx=5, pady=2)
-        tk.Button(inner, text="Clear", width=8, command=self._on_clear_master).grid(row=0, column=3, padx=5, pady=2)
-        
-        tk.Label(inner, text="Output Folder:", font=("Segoe UI", 9), bg=WHITE).grid(row=1, column=0, sticky="w", padx=5, pady=2)
-        self.var_out_folder = tk.StringVar(value="")
-        tk.Entry(inner, textvariable=self.var_out_folder, width=100).grid(row=1, column=1, padx=5, pady=2)
-        tk.Button(inner, text="Browse...", width=10, command=self._on_browse_out_folder).grid(row=1, column=2, padx=5, pady=2)
-        
-        tk.Label(inner, text="Output Filename:", font=("Segoe UI", 9), bg=WHITE).grid(row=2, column=0, sticky="w", padx=5, pady=2)
-        self.var_out_filename = tk.StringVar(value=f"SKODA_DSR_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-        tk.Entry(inner, textvariable=self.var_out_filename, width=100).grid(row=2, column=1, padx=5, pady=2)
-        tk.Label(inner, text="(.xlsx added automatically)", font=("Segoe UI", 8), fg="#6c757d", bg=WHITE).grid(row=2, column=2, sticky="w", padx=5, pady=2)
-        
-        self.var_push_zoho = tk.BooleanVar(value=True)
-        tk.Checkbutton(inner, text="Push Data to Zoho Creator API", font=("Segoe UI", 9, "bold"), bg=WHITE, variable=self.var_push_zoho).grid(row=3, column=1, sticky="w", padx=5, pady=10)
 
     def _build_preview(self) -> None:
         frame = ttk.LabelFrame(self.root, text="Data Preview / Processing Queue", padding=(10, 8))
@@ -512,17 +483,29 @@ class DSRGeneratorApp:
             self.tree.column(col, width=col_widths.get(col, 100), anchor="w")
 
     def _build_footer(self) -> None:
-        footer = tk.Frame(self.root, bg=WHITE, height=50)
+        footer = tk.Frame(self.root, bg=WHITE, height=60)
         footer.pack(fill="x", side="bottom", padx=20, pady=10)
         
         tk.Label(footer, text="© Nagarkot Forwarders Pvt Ltd", font=("Segoe UI", 8), fg="#6c757d", bg=WHITE).pack(side="left")
         
-        tk.Button(
-            footer, text="Generate DSR", font=("Segoe UI", 10, "bold"),
-            bg=BTN_BLUE, fg=WHITE, activebackground="#004494", activeforeground=WHITE,
+        btn_frame = tk.Frame(footer, bg=WHITE)
+        btn_frame.pack(side="right")
+
+        self.btn_review = tk.Button(
+            btn_frame, text="1. Review & Confirm Data", font=("Segoe UI", 10, "bold"),
+            bg="#f39c12", fg=WHITE, activebackground="#e67e22", activeforeground=WHITE,
             width=25, height=2, borderwidth=0, cursor="hand2",
-            command=self._on_generate
-        ).pack(side="right")
+            command=self._on_review
+        )
+        self.btn_review.pack(side="left", padx=10)
+
+        self.btn_push = tk.Button(
+            btn_frame, text="2. Push to Zoho & Export", font=("Segoe UI", 10, "bold"),
+            bg=BTN_BLUE, fg=WHITE, activebackground="#004494", activeforeground=WHITE,
+            width=25, height=2, borderwidth=0, cursor="arrow",
+            command=self._on_push_and_export, state="disabled"
+        )
+        self.btn_push.pack(side="left")
 
     # ═══ Actions ═════════════════════════════════════════════════════════
 
@@ -532,9 +515,6 @@ class DSRGeneratorApp:
             filetypes=[("PDF Files", "*.pdf")],
         )
         if files:
-            if not self.var_out_folder.get():
-                self.var_out_folder.set(str(Path(files[0]).parent))
-            
             for f in files:
                 p = Path(f)
                 d = p.parent
@@ -548,9 +528,6 @@ class DSRGeneratorApp:
         folder = filedialog.askdirectory(title="Select folder containing shipment PDFs")
         if folder:
             p = Path(folder)
-            if not self.var_out_folder.get():
-                self.var_out_folder.set(str(p))
-            
             pdfs = list(p.glob("*.pdf"))
             if pdfs:
                 if p not in self.files_by_dir:
@@ -565,27 +542,11 @@ class DSRGeneratorApp:
     def _on_clear_list(self) -> None:
         self.files_by_dir.clear()
         self.parsed_records.clear()
+        self.confirmed_records.clear()
         self.tree.delete(*self.tree.get_children())
         self.lbl_file_status.config(text="No files selected")
-        self.var_out_folder.set("")
+        self.btn_push.config(state="disabled", cursor="arrow")
 
-    def _on_browse_master(self) -> None:
-        f = filedialog.askopenfilename(
-            title="Select Master DSR",
-            filetypes=[("Excel Files", "*.xlsx")],
-        )
-        if f:
-            self.master_dsr_path = Path(f)
-            self.var_master_dsr.set(str(self.master_dsr_path))
-
-    def _on_clear_master(self) -> None:
-        self.master_dsr_path = None
-        self.var_master_dsr.set("")
-
-    def _on_browse_out_folder(self) -> None:
-        folder = filedialog.askdirectory(title="Select Output Folder")
-        if folder:
-            self.var_out_folder.set(folder)
 
     def _parse_and_refresh(self) -> None:
         self.tree.delete(*self.tree.get_children())
@@ -723,9 +684,9 @@ class DSRGeneratorApp:
             
             self.tree.insert("", "end", values=(directory.name, f"{len(files)} PDFs", status, containers_str, invoices_str, bl_no))
 
-    def _on_generate(self) -> None:
+    def _on_review(self) -> None:
         if not self.parsed_records:
-            messagebox.showwarning("No Data", "No valid parsed container records to generate DSR.")
+            messagebox.showwarning("No Data", "No valid parsed container records to review.")
             return
             
         # Before spawning preview, explicitly assign global manual settings to ALL the records
@@ -744,58 +705,115 @@ class DSRGeneratorApp:
             r.bl_type = global_bl_type
             r.bl_mode = global_bl_mode
 
-        # Pop up the Data Preview modal. Only if they confirm do we proceed.
-        DataPreviewWindow(self.root, self.parsed_records, self._process_generation)
+        # Pop up the Data Review modal. 
+        DataPreviewWindow(self.root, self.parsed_records, self._on_confirmation_complete)
 
-    def _process_generation(self) -> None:
-        out_name = self.var_out_filename.get().strip()
-        if not out_name.endswith(".xlsx"):
-            out_name += ".xlsx"
-        
-        out_folder = self.var_out_folder.get().strip()
-        if not out_folder:
-            out_folder = str(SCRIPT_DIR)
-        
-        save_path = Path(out_folder) / out_name
+    def _on_confirmation_complete(self) -> None:
+        """Called after user finishes editing/confirming in the Review window."""
+        self.confirmed_records = list(self.parsed_records)
+        self.btn_push.config(state="normal", cursor="hand2")
+        messagebox.showinfo("Ready", "Data confirmed! You can now click '2. Push to Zoho & Export'.")
 
+    def _get_existing_invoices(self) -> set[tuple[str, str]]:
+        """Reads the local Master DSR and returns a set of (Container No, Invoice No) tuples."""
+        existing_keys = set()
+        if not MASTER_FILE_PATH.exists():
+            return existing_keys
+            
         try:
-            if self.master_dsr_path and self.master_dsr_path.exists():
-                # Append directly to the master file in its original location
-                self._append_to_master(self.master_dsr_path)
-                excel_msg = f"DSR data appended successfully to Master file!\n\nAppended to: {self.master_dsr_path.name}"
+            wb = openpyxl.load_workbook(MASTER_FILE_PATH, read_only=True)
+            # Find common sheet names
+            sheet_name = next((n for n in ["Live shipments", "DSR"] if n in wb.sheetnames), wb.sheetnames[0])
+            ws = wb[sheet_name]
+            
+            # DSR_HEADERS: J=9 (Container No), P=15 (Invoice No) (0-indexed)
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if len(row) > 15:
+                    c_no = str(row[9]).strip().upper() if row[9] else ""
+                    inv_no_str = str(row[15]).strip().upper() if row[15] else ""
+                    if c_no and inv_no_str:
+                        # Split multiple invoices to check individually
+                        for single_inv in inv_no_str.split("/"):
+                            existing_keys.add((c_no, single_inv.strip()))
+            wb.close()
+        except Exception as e:
+            logger.warning(f"Could not read master file for duplicate check: {e}")
+        return existing_keys
+
+    def _on_push_and_export(self) -> None:
+        if not self.confirmed_records:
+            messagebox.showwarning("Error", "Please review and confirm data first.")
+            return
+
+        # 1. Duplicate Check using local Master file
+        existing_keys = self._get_existing_invoices()
+        records_to_process = []
+        duplicate_count = 0
+        
+        for rec in self.confirmed_records:
+            c_no = (rec.container_no or "").strip().upper()
+            inv_str = (rec.invoice_nos or "").strip().upper()
+            
+            # Check if this container+invoice combo already exists
+            is_new = False
+            for single_inv in inv_str.split("/"):
+                inv_key = single_inv.strip()
+                if not inv_key or (c_no, inv_key) not in existing_keys:
+                    is_new = True
+                    break
+            
+            if not is_new and inv_str: # If ALL invoices for this container are already there
+                duplicate_count += 1
             else:
-                self._create_new_dsr(save_path)
-                excel_msg = f"DSR generated successfully!\n\nSaved to: {save_path.name}"
+                records_to_process.append(rec)
+
+        if not records_to_process:
+            messagebox.showinfo("Duplicates Found", f"All {duplicate_count} records were already found in the Master DSR.\nNo new data to push.")
+            return
+
+        if duplicate_count > 0:
+            if not messagebox.askyesno("Duplicates Found", f"{duplicate_count} records appear to be already in the Master DSR.\n\nContinue pushing {len(records_to_process)} records?"):
+                return
+
+        # 2. Push to Zoho
+        try:
+            zoho = ZohoCreatorAPI()
+            success, msg = zoho.push_records(records_to_process)
             
-            # API Push
-            zoho_msg = ""
-            if self.var_push_zoho.get():
-                try:
-                    zoho = ZohoCreatorAPI()
-                    success, msg = zoho.push_records(self.parsed_records)
-                    if success:
-                        zoho_msg = f"\n\nZoho API: {msg}"
-                    else:
-                        zoho_msg = f"\n\nZoho API Warning: {msg}"
-                except Exception as ze:
-                    zoho_msg = f"\n\nZoho API Error: {ze}"
+            if not success:
+                messagebox.showerror("Zoho Push Failed", f"Excel export aborted because Zoho push failed:\n\n{msg}")
+                return
+                
+            zoho_msg = f"Zoho API: {msg}"
             
-            messagebox.showinfo("Success", excel_msg + zoho_msg)
+        except Exception as ze:
+            messagebox.showerror("Zoho API Error", f"Excel export aborted due to API error:\n\n{ze}")
+            return
+
+        # 3. If Zoho is successful, Update Master Excel
+        try:
+            if MASTER_FILE_PATH.exists():
+                self._append_to_master(MASTER_FILE_PATH, records_to_process)
+                excel_msg = "Data successfully appended to Master DSR!"
+            else:
+                self._create_new_dsr(MASTER_FILE_PATH, records_to_process)
+                excel_msg = "Master DSR created and data saved successfully!"
+            
+            messagebox.showinfo("Success", f"{excel_msg}\n\n{zoho_msg}")
+            
+            # Reset workflow
+            self.confirmed_records.clear()
+            self.btn_push.config(state="disabled", cursor="arrow")
 
         except Exception as exc:
-            logger.exception("Failed to generate DSR")
-            err_msg = str(exc)
-            if "old .xls file format" in err_msg or "InvalidFileException" in str(type(exc)):
-                messagebox.showerror("Export Error", "The Master DSR file must be a valid .xlsx file.\nOlder .xls formats are not supported.\n\nPlease open the master file in Excel and 'Save As' -> .xlsx first.")
-            else:
-                messagebox.showerror("Export Error", f"An error occurred while generating DSR:\n{exc}")
+            logger.exception("Failed to update Master Excel")
+            messagebox.showerror("Excel Error", f"An error occurred after Zoho push while updating the Master file:\n{exc}")
 
     # ── Excel Export Logic ───────────────────────────────────────────────
 
     def _record_to_row(self, rec: ContainerRecord) -> list:
         row = [""] * len(DSR_HEADERS)
         
-        # Format the user-editable dates on-the-fly for Excel (using datetime objects looks better in Excel)
         def _parse_dt(dt_str):
             if not dt_str: return None
             try: return datetime.strptime(dt_str, "%Y-%m-%d")
@@ -810,12 +828,9 @@ class DSRGeneratorApp:
         row[4] = rec.port_of_loading
         row[5] = rec.vessel_name
 
-        # Parse BL Date object
         bl_dt = None
-        try:
-            bl_dt = datetime.strptime(rec.bl_date, "%Y-%m-%d")
-        except:
-            pass
+        try: bl_dt = datetime.strptime(rec.bl_date, "%Y-%m-%d")
+        except: pass
         row[6] = bl_dt if bl_dt else rec.bl_date
 
         row[7] = _parse_dt(rec.vessel_eta)
@@ -835,14 +850,18 @@ class DSRGeneratorApp:
 
         return row
 
-    def _style_header_row(self, ws: Worksheet) -> None:
+    def _apply_dsr_styling(self, ws: Worksheet) -> None:
+        """Applies NAGARKOT styling to the DSR sheet."""
         header_font = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF")
         header_fill = PatternFill("solid", fgColor="1B3A5C")
         header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
         thin_border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
+        data_font = Font(name="Segoe UI", size=9)
+        data_align = Alignment(vertical="center", wrap_text=False)
 
-        for col_idx, header in enumerate(DSR_HEADERS, 1):
-            cell = ws.cell(row=1, column=col_idx, value=header)
+        # Style header
+        for col_idx, _ in enumerate(DSR_HEADERS, 1):
+            cell = ws.cell(row=1, column=col_idx)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_align
@@ -851,60 +870,50 @@ class DSRGeneratorApp:
         ws.row_dimensions[1].height = 40
         ws.freeze_panes = "A2"
 
-    def _create_new_dsr(self, save_path: Path) -> None:
-        wb = openpyxl.Workbook()
-        ws_live = wb.active
-        ws_live.title = "Live shipments"
-        self._style_header_row(ws_live)
-
-        data_font = Font(name="Segoe UI", size=9)
-        data_align = Alignment(vertical="center", wrap_text=False)
-        thin_border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
-
-        for row_idx, rec in enumerate(self.parsed_records, 2):
-            row_data = self._record_to_row(rec)
-            for col_idx, value in enumerate(row_data, 1):
-                cell = ws_live.cell(row=row_idx, column=col_idx, value=value)
+        # Style data rows
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
                 cell.font = data_font
                 cell.alignment = data_align
                 cell.border = thin_border
-                if col_idx in (2, 7, 8):
+                # Date formats for columns B, G, H (1-indexed: 2, 7, 8)
+                if cell.column in (2, 7, 8):
                     cell.number_format = "YYYY-MM-DD"
 
+        # Auto-width
         for col_idx in range(1, len(DSR_HEADERS) + 1):
-            ws_live.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 15
+            col_letter = openpyxl.utils.get_column_letter(col_idx)
+            ws.column_dimensions[col_letter].width = 15
 
-        ws_cleared = wb.create_sheet("Cleared shipments")
-        self._style_header_row(ws_cleared)
-        for col_idx in range(1, len(DSR_HEADERS) + 1):
-            ws_cleared.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 15
-
-        wb.save(save_path)
+    def _append_to_master(self, path: Path, records: list[ContainerRecord]) -> None:
+        wb = openpyxl.load_workbook(path)
+        sheet_name = next((n for n in ["Live shipments", "DSR"] if n in wb.sheetnames), wb.sheetnames[0])
+        ws = wb[sheet_name]
+        
+        for rec in records:
+            ws.append(self._record_to_row(rec))
+        
+        self._apply_dsr_styling(ws)
+        wb.save(path)
         wb.close()
 
-    def _append_to_master(self, master_path: Path) -> None:
-        wb = openpyxl.load_workbook(master_path)
+    def _create_new_dsr(self, save_path: Path, records: list[ContainerRecord]) -> None:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Live shipments"
+        ws.append(DSR_HEADERS)
+        
+        for rec in records:
+            ws.append(self._record_to_row(rec))
+            
+        self._apply_dsr_styling(ws)
+        # Create second sheet empty as per original code pattern
+        cleared = wb.create_sheet("Cleared shipments")
+        # Apply header to second sheet too
+        cleared.append(DSR_HEADERS)
+        self._apply_dsr_styling(cleared)
 
-        sheet_name = next((name for name in wb.sheetnames if "live" in name.lower()), wb.sheetnames[0])
-        ws = wb[sheet_name]
-        next_row = ws.max_row + 1
-
-        data_font = Font(name="Segoe UI", size=9)
-        data_align = Alignment(vertical="center", wrap_text=False)
-        thin_border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
-
-        for rec in self.parsed_records:
-            row_data = self._record_to_row(rec)
-            for col_idx, value in enumerate(row_data, 1):
-                cell = ws.cell(row=next_row, column=col_idx, value=value)
-                cell.font = data_font
-                cell.alignment = data_align
-                cell.border = thin_border
-                if col_idx in (2, 7, 8):
-                    cell.number_format = "YYYY-MM-DD"
-            next_row += 1
-
-        wb.save(master_path)
+        wb.save(save_path)
         wb.close()
 
 
