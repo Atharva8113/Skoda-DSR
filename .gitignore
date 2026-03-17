@@ -19,6 +19,7 @@ zoho_api.py
 *.xls
 *.csv
 *.pdf
+*.txt
 # (Except templates if any, but currently none marked as such)
 *.zip
 # OS

@@ -44,6 +44,8 @@ class ContainerRecord:
     vessel_eta: str = ""             # Global manual input
     bl_type: str = ""                # Global manual input
     bl_mode: str = ""                # Global manual input
+    hbl_no: str = ""                 # New field for combined scenario
+    mbl_no: str = ""                 # New field for combined scenario
 
 
 def parse_bl(pdf_path: str | Path) -> list[ContainerRecord]:
@@ -71,6 +73,9 @@ def parse_bl(pdf_path: str | Path) -> list[ContainerRecord]:
     elif "MAERSK" in text_upper or "MAEU" in text_upper:
         logger.info("Detected Maersk BL format")
         return _parse_maersk(full_text, pdf_path.stem)
+    elif "EVERGREEN" in text_upper or "EGLV" in text_upper:
+        logger.info("Detected Evergreen BL format")
+        return _parse_evergreen(full_text, pdf_path.stem)
     else:
         logger.warning("Unknown BL format, attempting Maersk parser as fallback")
         return _parse_maersk(full_text, pdf_path.stem)
@@ -83,13 +88,45 @@ def _parse_maersk(text: str, filename: str) -> list[ContainerRecord]:
 
     base = ContainerRecord(shipping_line="MAERSK")
 
-    # BL Number — from filename or text (strip MAEU prefix)
-    bl_match = re.search(r"B/L[:\s]*(\d{9,})", text)
-    if bl_match:
-        base.bl_no = bl_match.group(1)
-    elif re.match(r"(?:MAEU)?(\d{9})", filename.upper()):
-        match = re.match(r"(?:MAEU)?(\d{9})", filename.upper())
-        base.bl_no = match.group(1) if match else filename
+    # BL Number — from filename or text
+    # Look for common patterns: DESTRA..., EGLV..., HLCU..., MAEU...
+    bl_patterns = [
+        r"(?:B/L|WAYBILL|SWB)\s+(?:NOS?|NO\.?|NUMBER)?[:\s]*([A-Z]{4,6}[0-9]{6,})", # Prefixed (DESTRA, HLCU)
+        r"(?:B/L|WAYBILL|SWB)\s+(?:NOS?|NO\.?|NUMBER)?[:\s]*([0-9]{9,12})",     # Numeric (Maersk)
+        r"\b(DESTRA[0-9]{8,12})\b",                                             # Specific DESTRA
+        r"B/L[:\s]*([A-Z0-9]{8,})",                                              # Generic Captive
+    ]
+    
+    ignore_words = {"ATTACHMENT", "NON-NEGOTIABLE", "ORIGINAL", "COPY", "DRAFT"}
+    
+    best_candidate = ""
+    for p in bl_patterns:
+        matches = re.finditer(p, text, re.IGNORECASE)
+        for m in matches:
+            val = m.group(1).upper().strip()
+            if val in ignore_words or len(val) < 8:
+                continue
+            # If it's a specific prefix we want (like DESTRA), take it immediately
+            if val.startswith("DESTRA"):
+                best_candidate = val
+                break
+            if not best_candidate:
+                best_candidate = val
+        if best_candidate and best_candidate.startswith("DESTRA"):
+            break
+            
+    if best_candidate:
+        base.bl_no = best_candidate
+            
+    if not base.bl_no:
+        # Fallback to filename
+        if re.match(r"(?:MAEU)?(\d{9})", filename.upper()):
+            match = re.match(r"(?:MAEU)?(\d{9})", filename.upper())
+            base.bl_no = match.group(1) if match else filename
+        else:
+            # Try to find any alphanumeric ID in filename
+            fid_match = re.search(r"([A-Z0-9]{8,})", filename.upper())
+            base.bl_no = fid_match.group(1) if fid_match else filename
 
     # Vessel
     vessel_match = re.search(r"Vessel\s*\n\s*(.+?)(?:\n|Voyage)", text, re.DOTALL)
@@ -405,5 +442,118 @@ def _parse_hapag(text: str, filename: str) -> list[ContainerRecord]:
         base.hs_codes = all_hs
         records = [base]
 
+    return records
+
+
+# ─── Evergreen Parser ───────────────────────────────────────────────────────
+
+def _parse_evergreen(text: str, filename: str) -> list[ContainerRecord]:
+    """Parse Evergreen Bill of Lading."""
+    base = ContainerRecord(shipping_line="EVERGREEN")
+
+    # BL Number
+    bl_match = re.search(r"B/L\s+NO\.\s*(EGLV\d+)", text, re.IGNORECASE)
+    if bl_match:
+        base.bl_no = bl_match.group(1).upper()
+    elif filename.upper().startswith("EGLV"):
+        base.bl_no = filename.upper()
+    
+    # Try looking for EGLV followed by numbers anywhere
+    if not base.bl_no:
+        bl_alt = re.search(r"(EGLV\d{5,})", text, re.IGNORECASE)
+        if bl_alt:
+            base.bl_no = bl_alt.group(1).upper()
+
+    # Vessel Name
+    # Evergreen often has "M.V. EVER ..." or "EVER ..."
+    vessel_match = re.search(r"(EVER\s+[A-Z]+)\s+(\d{3,4}[A-Z]?)", text)
+    if vessel_match:
+        base.vessel_name = f"{vessel_match.group(1)} {vessel_match.group(2)}".strip()
+    else:
+        # Try finding "M.V. " line
+        mv_match = re.search(r"M\.V\.\s+([A-Z\s]+)", text)
+        if mv_match:
+            base.vessel_name = mv_match.group(1).strip()
+
+    # Port of Loading
+    pol_match = re.search(r"PORT OF LOADING\s*\n\s*(.+)", text, re.IGNORECASE)
+    if not pol_match:
+         # Often appears twice, once in a header and once in shipment info
+         pol_match = re.search(r"PENANG|NHAVA SHEVA|PORT KELANG", text, re.IGNORECASE)
+    
+    if pol_match:
+        # If it was a group(1) match, use it, else use the raw string
+        pol_val = pol_match.group(1).strip() if len(pol_match.groups()) > 0 else pol_match.group(0).strip()
+        base.port_of_loading = pol_val.title()
+
+    # Date
+    # Evergreen date format: MAR.13,2026
+    date_match = re.search(r"([A-Z]{3})\.?(\d{1,2}),\s*(\d{4})", text, re.IGNORECASE)
+    if date_match:
+        mon_str = date_match.group(1).upper()[:3]
+        day = date_match.group(2).zfill(2)
+        year = date_match.group(3)
+        months = {
+            "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04",
+            "MAY": "05", "JUN": "06", "JUL": "07", "AUG": "08",
+            "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12",
+        }
+        mm = months.get(mon_str, "01")
+        base.bl_date = f"{year}-{mm}-{day}"
+
+    # Shipper / Supplier
+    if "PREMIUM SOUND SOLUTIONS" in text.upper():
+        base.supplier_name = "PREMIUM SOUND SOLUTIONS SDN BHD"
+    elif "VOLKSWAGEN" in text.upper():
+        base.supplier_name = "VOLKSWAGEN AG"
+    elif "DR.ING.H.C.F.PORSCHE" in text.upper():
+        base.supplier_name = "DR.ING.H.C.F.PORSCHE AG"
+
+    # Container Parsing
+    # Pattern: EGSU1926250/40H/EMCSGN8724/42 PALLETS
+    container_pattern = re.compile(
+        r"([A-Z]{4}\d{7})\s*/\s*"         # Container No
+        r"(\d{2})([A-Z]?)",               # Size (20/40) + Type (H/D etc)
+        re.IGNORECASE
+    )
+
+    seen_containers: dict[str, ContainerRecord] = {}
+
+    for match in container_pattern.finditer(text):
+        cno = match.group(1).upper()
+        size = match.group(2)
+        type_code = match.group(3).upper()
+        
+        ctype = "HQ" if type_code == "H" else "SD"
+        
+        if cno not in seen_containers:
+            rec = ContainerRecord(
+                shipping_line="EVERGREEN",
+                bl_no=base.bl_no,
+                vessel_name=base.vessel_name,
+                port_of_loading=base.port_of_loading,
+                bl_date=base.bl_date,
+                supplier_name=base.supplier_name,
+                container_no=cno,
+                container_size=size,
+                container_type=ctype,
+            )
+            
+            # Find weight/packages for this container
+            # Evergreen layout is tricky; weight typically appears once for the whole BL if single container
+            weight_match = re.search(r"([\d,.]+)\s*KGS", text)
+            if weight_match:
+                rec.gross_weight = weight_match.group(1).replace(",", "")
+            
+            pkg_match = re.search(r"(\d+)\s+(?:PALLETS|PACKAGES|BOXES)", text, re.IGNORECASE)
+            if pkg_match:
+                rec.num_packages = pkg_match.group(1)
+                
+            seen_containers[cno] = rec
+
+    records = list(seen_containers.values())
+    if not records:
+        records = [base]
+    
     return records
 

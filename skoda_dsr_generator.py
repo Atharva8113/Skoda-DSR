@@ -148,6 +148,7 @@ class BetterDateEntry(tk.Frame):
             return
 
         cal = Calendar(frame, selectmode="day", date_pattern="yyyy-mm-dd", showweeknumbers=False, 
+                       selectmonth=True, selectyear=True,
                        font=("Segoe UI", 9), background="#0056b3", foreground="white",
                        headersbackground="#F8F9FA", headersforeground="black")
         cal.pack()
@@ -157,7 +158,50 @@ class BetterDateEntry(tk.Frame):
             top.destroy()
             
         cal.bind("<<CalendarSelected>>", on_select)
-        top.bind("<FocusOut>", lambda e: top.destroy())
+        def on_scroll(event):
+            # Windows/MacOS: event.delta
+            if event.delta > 0:
+                cal._prev_month()
+            else:
+                cal._next_month()
+        
+        cal.bind("<MouseWheel>", on_scroll)
+        top.bind("<Escape>", lambda e: top.destroy())
+        
+        def check_focus():
+            if not top.winfo_exists():
+                return
+            # If focus is None, it might be a momentary transition or a dropdown
+            if top.focus_get() is None:
+                top.after(200, perform_destroy_if_lost)
+            else:
+                perform_destroy_if_lost()
+        
+        def perform_destroy_if_lost():
+            try:
+                if not top.winfo_exists():
+                    return
+                new_focus = top.focus_get()
+                if new_focus is None:
+                    top.destroy()
+                    return
+
+                # Check if the new focus widget is a descendant of 'top'
+                parent = new_focus
+                is_child = False
+                while parent:
+                    if parent == top:
+                        is_child = True
+                        break
+                    parent = getattr(parent, 'master', None)
+                if not is_child:
+                    top.destroy()
+            except Exception:
+                # Catch potential naming/resolution errors from internal tk widgets (like popdown)
+                if top.winfo_exists():
+                    top.destroy()
+
+        top.bind("<FocusOut>", lambda e: check_focus())
         cal.focus_set()
 
     def get(self):
@@ -239,7 +283,6 @@ class DataPreviewWindow(tk.Toplevel):
             ("user_month", "Month", 60),
             ("pre_alert_date", "Pre-Alert", 90),
             ("vessel_eta", "Vessel ETA", 90),
-            ("bl_type", "BL Type", 80),
             ("bl_mode", "Mode", 80),
             ("bl_no", "BL No", 100),
             ("container_no", "Container No", 100),
@@ -328,7 +371,7 @@ class DataPreviewWindow(tk.Toplevel):
 class DSRGeneratorApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Skoda DSR Generator — Nagarkot")
+        self.root.title("Skoda (SAVWILP) DSR Generator — Nagarkot")
         self.root.state("zoomed")
         self.root.configure(bg=WHITE)
         self.root.minsize(1000, 700)
@@ -345,17 +388,42 @@ class DSRGeneratorApp:
         style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), background="#E9ECEF", foreground="#495057")
         style.configure("Treeview", font=("Segoe UI", 9), rowheight=25)
         
-        # State
+        # State / UI Variables
         self.files_by_dir: dict[Path, list[Path]] = {}
         self.parsed_records: list[ContainerRecord] = []
         self.confirmed_records: list[ContainerRecord] = []
         self.master_dsr_path: Path = MASTER_FILE_PATH
+        self.logo_img = None
+        self.tree: ttk.Treeview = None # type: ignore
+        self.lbl_file_status: tk.Label = None # type: ignore
+        self.cb_user: ttk.Combobox = None # type: ignore
+        self.cal_pre_alert: BetterDateEntry = None # type: ignore
+        self.cal_vessel_eta: BetterDateEntry = None # type: ignore
+        self.cb_month: ttk.Combobox = None # type: ignore
+        self.cb_mode: ttk.Combobox = None # type: ignore
+        self.entry_branch: ttk.Entry = None # type: ignore
+        self.btn_review: tk.Button = None # type: ignore
+        self.btn_push: tk.Button = None # type: ignore
+
+        self.var_trio_inv = tk.StringVar()  # Display: basenames
+        self.var_trio_hbl = tk.StringVar()  # Display: basenames
+        self.var_trio_mbl = tk.StringVar()  # Display: basename
+        
+        self.trio_inv_paths: list[str] = []
+        self.trio_hbl_paths: list[str] = []
+        self.trio_mbl_path: str = ""
+        
+        self.var_user = tk.StringVar(value="Ashish (CSN)")
+        self.var_month = tk.StringVar()
+        self.var_mode = tk.StringVar(value="Sea (FCL)")
+        self.var_branch = tk.StringVar(value="MUMBAI")
+
         self._load_logo()
         self._build_header()
         self._build_file_selection()
         self._build_manual_settings()
-        self._build_footer()
         self._build_preview()
+        self._build_footer()
 
     def _load_logo(self) -> None:
         self.logo_img = None
@@ -391,27 +459,39 @@ class DSRGeneratorApp:
         ).pack(pady=(2, 0))
 
     def _build_file_selection(self) -> None:
-        frame = ttk.LabelFrame(self.root, text="File Selection", padding=(10, 8))
-        frame.pack(fill="x", padx=20, pady=5)
-        
-        btn_frame = tk.Frame(frame, bg=WHITE)
-        btn_frame.pack(fill="x", side="left")
+        file_selection_frame = ttk.LabelFrame(self.root, text="File Selection", padding=(10, 8))
+        file_selection_frame.pack(fill="x", padx=20, pady=5)
 
-        # Standard buttons
-        btn_sel_pdfs = tk.Button(btn_frame, text="Select PDFs", width=15, command=self._on_select_pdfs)
-        btn_sel_pdfs.pack(side="left", padx=(0, 10))
+        # Simplified Selection: Only Trio Match
+        sel_box = tk.Frame(file_selection_frame, bg="#F8F9FA", pady=15, padx=15)
+        sel_box.pack(fill="x", pady=5)
         
-        btn_sel_folder = tk.Button(btn_frame, text="Select Folder", width=15, command=self._on_select_folder)
-        btn_sel_folder.pack(side="left", padx=(0, 10))
+        row = tk.Frame(sel_box, bg="#F8F9FA")
+        row.pack(fill="x")
         
-        btn_clear = tk.Button(btn_frame, text="Clear List", width=15, command=self._on_clear_list)
-        btn_clear.pack(side="left", padx=(0, 20))
+        # Space on left filled by Clear button
+        tk.Button(row, text="Clear Inputs", width=12, command=self._on_clear_list, relief="groove").pack(side="left", padx=(0, 20))
 
-        self.lbl_file_status = tk.Label(btn_frame, text="No files selected", font=("Segoe UI", 9), fg="#495057", bg=WHITE)
-        self.lbl_file_status.pack(side="left")
+        # Invoice
+        tk.Button(row, text="Select Invoice", width=12, command=lambda: self._select_trio_file("inv")).pack(side="left", padx=2)
+        tk.Entry(row, textvariable=self.var_trio_inv, width=30, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        
+        # HBL
+        tk.Button(row, text="Select HBL", width=12, command=lambda: self._select_trio_file("hbl")).pack(side="left", padx=10)
+        tk.Entry(row, textvariable=self.var_trio_hbl, width=28, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        
+        # MBL
+        tk.Button(row, text="Select MBL", width=12, command=lambda: self._select_trio_file("mbl")).pack(side="left", padx=10)
+        tk.Entry(row, textvariable=self.var_trio_mbl, width=28, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        
+        tk.Button(row, text="Extract", bg="#28A745", fg=WHITE, font=("Segoe UI", 9, "bold"), width=15, height=1, command=self._on_process_trio).pack(side="right", padx=(10, 0))
+        
+        # Action Status below
+        self.lbl_file_status = tk.Label(sel_box, text="Ready", font=("Segoe UI", 8), fg="#6c757d", bg="#F8F9FA")
+        self.lbl_file_status.pack(side="left", pady=(5,0))
 
     def _build_manual_settings(self) -> None:
-        frame = ttk.LabelFrame(self.root, text="Manual / Zoho Fields", padding=(10, 8))
+        frame = ttk.LabelFrame(self.root, text="Manual / Shakti Fields", padding=(10, 8))
         frame.pack(fill="x", padx=20, pady=5)
         
         inner = tk.Frame(frame, bg=WHITE)
@@ -419,45 +499,31 @@ class DSRGeneratorApp:
         
         # User
         tk.Label(inner, text="User:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=0, sticky="w", padx=5)
-        self.var_user = tk.StringVar(value="Ashish (CSN)")
-        self.cb_user = ttk.Combobox(inner, textvariable=self.var_user, values=["Ashish (CSN)", "Ranjit (PUNE)"], width=27)
+        self.cb_user = ttk.Combobox(inner, textvariable=self.var_user, values=["Ashish (CSN)", "Ranjit (PUNE)", "CLC / After sales"], width=27)
         self.cb_user.grid(row=0, column=1, sticky="w", padx=5)
         
+        # Month Dropdown
+        tk.Label(inner, text="Month:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=2, sticky="w", padx=(20, 5))
+        self.cb_month = ttk.Combobox(inner, textvariable=self.var_month, values=list(MONTH_MAP.values()), width=10, state="readonly")
+        self.cb_month.grid(row=0, column=3, sticky="w", padx=5)
+
         # Pre-alert Date (custom pop-up)
-        tk.Label(inner, text="Pre-alert Receive Date:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=2, sticky="w", padx=(20, 5))
+        tk.Label(inner, text="Pre-alert Receive Date:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=4, sticky="w", padx=(20, 5))
         self.cal_pre_alert = BetterDateEntry(inner, width=15, bg=WHITE)
-        self.cal_pre_alert.grid(row=0, column=3, sticky="w", padx=5)
-        self.cal_pre_alert.delete(0, "end")
+        self.cal_pre_alert.grid(row=0, column=5, sticky="w", padx=5)
         
         # Vessel ETA (custom pop-up)
-        tk.Label(inner, text="Vessel ETA:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=4, sticky="w", padx=(20, 5))
+        tk.Label(inner, text="Vessel ETA:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=6, sticky="w", padx=(20, 5))
         self.cal_vessel_eta = BetterDateEntry(inner, width=15, bg=WHITE)
-        self.cal_vessel_eta.grid(row=0, column=5, sticky="w", padx=5)
-        self.cal_vessel_eta.delete(0, "end")
-        
-        # Month Dropdown
-        tk.Label(inner, text="Month:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=6, sticky="w", padx=(20, 5))
-        self.var_month = tk.StringVar()
-        self.cb_month = ttk.Combobox(inner, textvariable=self.var_month, values=list(MONTH_MAP.values()), width=6, state="readonly")
-        self.cb_month.grid(row=0, column=7, sticky="w", padx=5)
-        
-        # BL Type Radio buttons
-        tk.Label(inner, text="BL Type:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=0, column=8, sticky="w", padx=(20, 5))
-        self.var_bl_type = tk.StringVar(value="MAWB_MBL")
-        rb_frame = tk.Frame(inner, bg=WHITE)
-        rb_frame.grid(row=0, column=9, sticky="w")
-        tk.Radiobutton(rb_frame, text="MBL", variable=self.var_bl_type, value="MAWB_MBL", bg=WHITE, font=("Segoe UI", 9)).pack(side="left")
-        tk.Radiobutton(rb_frame, text="HBL", variable=self.var_bl_type, value="HAWB_HBL", bg=WHITE, font=("Segoe UI", 9)).pack(side="left")
+        self.cal_vessel_eta.grid(row=0, column=7, sticky="w", padx=5)
         
         # Mode Dropdown
         tk.Label(inner, text="Mode:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=1, column=0, sticky="w", padx=5, pady=5)
-        self.var_mode = tk.StringVar(value="Sea (FCL)")
         self.cb_mode = ttk.Combobox(inner, textvariable=self.var_mode, values=["Air", "Sea (FCL)", "Sea (LCL)", "Sea (BB)"], width=15, state="readonly")
         self.cb_mode.grid(row=1, column=1, sticky="w", padx=5, pady=5)
 
         # Branch (Locked to MUMBAI)
         tk.Label(inner, text="Branch:", font=("Segoe UI", 9, "bold"), bg=WHITE).grid(row=1, column=2, sticky="w", padx=(20, 5), pady=5)
-        self.var_branch = tk.StringVar(value="MUMBAI")
         self.entry_branch = ttk.Entry(inner, textvariable=self.var_branch, width=15, state="readonly")
         self.entry_branch.grid(row=1, column=3, sticky="w", padx=5, pady=5)
 
@@ -466,8 +532,9 @@ class DSRGeneratorApp:
         frame = ttk.LabelFrame(self.root, text="Data Preview / Processing Queue", padding=(10, 8))
         frame.pack(fill="both", expand=True, padx=20, pady=5)
 
-        columns = ("Directory", "Files", "Status", "Parsed Container(s)", "Invoice Nos", "BL No")
+        columns = ("Directory", "Files", "Status", "Parsed Container(s)", "Invoice Nos", "BL No", "Action")
         self.tree = ttk.Treeview(frame, columns=columns, show="headings")
+        self.tree.tag_configure("duplicate", background="#FFF3CD") # Light yellow for duplicates
         
         vsb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
         vsb.pack(side="right", fill="y")
@@ -475,12 +542,16 @@ class DSRGeneratorApp:
         self.tree.pack(side="left", fill="both", expand=True)
 
         col_widths = {
-            "Directory": 200, "Files": 100, "Status": 100, 
-            "Parsed Container(s)": 150, "Invoice Nos": 200, "BL No": 120
+            "Directory": 200, "Files": 80, "Status": 100, 
+            "Parsed Container(s)": 150, "Invoice Nos": 200, "BL No": 120,
+            "Action": 80
         }
         for col in columns:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=col_widths.get(col, 100), anchor="w")
+            anchor = "center" if col == "Action" else "w"
+            self.tree.column(col, width=col_widths.get(col, 100), anchor=anchor)
+
+        self.tree.bind("<Button-1>", self._on_tree_click)
 
     def _build_footer(self) -> None:
         footer = tk.Frame(self.root, bg=WHITE, height=60)
@@ -500,14 +571,12 @@ class DSRGeneratorApp:
         self.btn_review.pack(side="left", padx=10)
 
         self.btn_push = tk.Button(
-            btn_frame, text="2. Push to Zoho & Export", font=("Segoe UI", 10, "bold"),
+            btn_frame, text="2. Push to Shakti & Export", font=("Segoe UI", 10, "bold"),
             bg=BTN_BLUE, fg=WHITE, activebackground="#004494", activeforeground=WHITE,
             width=25, height=2, borderwidth=0, cursor="arrow",
             command=self._on_push_and_export, state="disabled"
         )
         self.btn_push.pack(side="left")
-
-    # ═══ Actions ═════════════════════════════════════════════════════════
 
     def _on_select_pdfs(self) -> None:
         files = filedialog.askopenfilenames(
@@ -539,6 +608,192 @@ class DSRGeneratorApp:
             else:
                 messagebox.showinfo("No PDFs", "No PDF files found in the selected folder.")
 
+    def _select_trio_file(self, kind: str) -> None:
+        if kind in ["inv", "hbl"]:
+            title = "Select Invoice PDF(s)" if kind == "inv" else "Select HBL PDF(s)"
+            files = filedialog.askopenfilenames(title=title, filetypes=[("PDF Files", "*.pdf")])
+            if files:
+                if kind == "inv":
+                    self.trio_inv_paths = list(files)
+                    self.var_trio_inv.set(f"({len(files)} files) " + ", ".join(Path(f).name for f in files))
+                else:
+                    self.trio_hbl_paths = list(files)
+                    self.var_trio_hbl.set(f"({len(files)} files) " + ", ".join(Path(f).name for f in files))
+        else:
+            f = filedialog.askopenfilename(title="Select MBL PDF", filetypes=[("PDF Files", "*.pdf")])
+            if f:
+                self.trio_mbl_path = f
+                self.var_trio_mbl.set(Path(f).name)
+
+    def _on_process_trio(self) -> None:
+        try:
+            inv_paths = [Path(p) for p in self.trio_inv_paths]
+            hbl_paths = [Path(p) for p in self.trio_hbl_paths]
+            mbl_path = Path(self.trio_mbl_path) if self.trio_mbl_path else None
+            
+            # inv_str = self.var_trio_inv.get().strip()
+            # hbl_str = self.var_trio_hbl.get().strip()
+            # mbl_str = self.var_trio_mbl.get().strip()
+            
+            # # Invoice(s) can be multiple
+            # inv_paths = [Path(p.strip()) for p in inv_str.split(",") if p.strip()]
+            
+            if not inv_paths or (not hbl_paths and not mbl_path):
+                messagebox.showwarning("Missing Files", "Minimum one Invoice + one BL (HBL or MBL) required.")
+                return
+
+            # 1. Parse BLs
+            mbl_recs = parse_bl(mbl_path) if mbl_path else []
+            hbl_recs_all = []
+            for hp in hbl_paths:
+                hbl_recs_all.extend(parse_bl(hp))
+            
+            # Combine unique containers from all BLs
+            base_recs = []
+            seen_c = set()
+            raw_recs = mbl_recs + hbl_recs_all
+            
+            # Filter: if any record has a container, ignore empty ones
+            has_containers = any(r.container_no.strip() for r in raw_recs)
+            
+            for r in raw_recs:
+                cur_c = r.container_no.upper().strip()
+                if has_containers and not cur_c:
+                    continue # Ignore fallback records if we have real details
+                    
+                if cur_c not in seen_c:
+                    base_recs.append(r)
+                    seen_c.add(cur_c)
+            
+            if not base_recs:
+                 messagebox.showerror("No Data", "Could not extract container details from the provided BLs.")
+                 return
+
+            # Combine them
+            
+            # Identify MBL and HBL numbers (Formatted)
+            mbl_no_raw = mbl_recs[0].bl_no if mbl_recs else ""
+            hbl_nos_list = list(dict.fromkeys(r.bl_no for r in hbl_recs_all))
+            
+            mbl_no = self._format_bl_number(mbl_no_raw)
+            hbl_no_combined = "/".join(self._format_bl_number(h) for h in hbl_nos_list)
+            
+            # Parse ALL Invoices for items and possible supplier
+            inv_text = ""
+            for inv_p in inv_paths:
+                try:
+                    doc = fitz.open(str(inv_p))
+                    inv_text += "".join(page.get_text().upper() for page in doc)
+                    doc.close()
+                except Exception as e:
+                    logger.warning(f"Could not read invoice {inv_p}: {e}")
+            
+            # Detect Supplier (from user instructions)
+            detected_supplier = ""
+            # Mapping logic from HBL if available (User asked: "take the supplier name mapping from hbl")
+            if hbl_recs_all and hbl_recs_all[0].supplier_name:
+                detected_supplier = hbl_recs_all[0].supplier_name
+            elif "PREMIUM SOUND" in inv_text:
+                detected_supplier = "PREMIUM SOUND SOLUTIONS SDN BHD"
+            elif "AUDI HUNGARIA" in inv_text:
+                detected_supplier = "AUDI HUNGARIA ZRT."
+            elif "VOLKSWAGEN AG" in inv_text:
+                detected_supplier = "VOLKSWAGEN AG"
+            elif "AUDI AG" in inv_text:
+                detected_supplier = "AUDI AG"
+            elif "SKODA AUTO" in inv_text or "CELKOV" in inv_text:
+                detected_supplier = "Skoda Auto A.S."
+            
+            # 2. Map Invoices to Containers (Logic from _parse_and_refresh)
+            container_to_invoices = {rec.container_no.upper(): set() for rec in base_recs}
+            unmapped_invoices = set()
+            global_inv_nos = [] # All detected invoice numbers
+
+            for inv_p in inv_paths:
+                # Determine Invoice Number (Priority: Content -> Filename -> Stem)
+                detected_inv_nos = []
+                inv_raw_text = ""
+                try:
+                    doc = fitz.open(str(inv_p))
+                    for page in doc:
+                        text_chunk = page.get_text().upper()
+                        inv_raw_text += text_chunk + "\n"
+                        found = re.findall(r"INVOICE\s*(?:NO|NUMBER|#)?\.?\s*[:\-]?\s*(\d{8,10})", text_chunk)
+                        if found: detected_inv_nos.extend(found)
+                    doc.close()
+                except: pass
+
+                if not detected_inv_nos:
+                    detected_inv_nos = re.findall(r"\b(\d{8,10})\b", inv_p.stem)
+                
+                inv_no = "/".join(dict.fromkeys(detected_inv_nos)) if detected_inv_nos else re.split(r"[-.]", inv_p.stem)[0]
+                global_inv_nos.append(inv_no)
+
+                # Find containers in this specific invoice
+                found_containers = set(re.findall(r"\b([A-Z]{4}\d{7})\b", inv_raw_text))
+                mapped = False
+                for c_no in found_containers:
+                    if c_no in container_to_invoices:
+                        container_to_invoices[c_no].add(inv_no)
+                        mapped = True
+                
+                if not mapped:
+                    unmapped_invoices.add(inv_no)
+
+            # 3. Finalize Records
+            combined_records = []
+            for r in base_recs:
+                r.hbl_no = hbl_no_combined
+                r.mbl_no = mbl_no
+                # Combined BL Pattern: MBL/HBL as requested
+                r.bl_no = f"{mbl_no}/{hbl_no_combined}" if mbl_no and hbl_no_combined else (mbl_no or hbl_no_combined)
+                
+                cno = r.container_no.upper()
+                mapped_set = container_to_invoices.get(cno, set())
+                
+                if mapped_set:
+                    # Invoices found FOR THIS container + any global/unmapped ones
+                    final_invs = sorted(list(mapped_set | unmapped_invoices))
+                    r.invoice_nos = "/".join(final_invs)
+                else:
+                    # Fallback: if no specific mapping found, use all (or unmapped)
+                    r.invoice_nos = "/".join(sorted(list(unmapped_invoices))) if unmapped_invoices else "/".join(dict.fromkeys(global_inv_nos))
+
+                if detected_supplier:
+                    r.supplier_name = detected_supplier
+                combined_records.append(r)
+
+            if not combined_records:
+                messagebox.showerror("No Data", "Could not extract container details from the provided BLs.")
+                return
+
+            self.parsed_records.extend(combined_records)
+            
+            # Add to tree
+            inv_names = ", ".join(p.name for p in inv_paths)
+            display_name = inv_names if len(inv_names) < 40 else f"{inv_names[:37]}..."
+            
+            total_files = len(inv_paths) + len(hbl_paths) + (1 if mbl_path else 0)
+            containers_str = ", ".join(r.container_no for r in base_recs)
+            display_bl = base_recs[0].bl_no if base_recs else "None"
+            all_invs_display = "/".join(dict.fromkeys(global_inv_nos))
+            
+            item_iid = self.tree.insert("", "end", values=(f"TRIO ({total_files} Files)", f"{total_files} PDFs", "Parsed (Trio)", containers_str, all_invs_display, display_bl, "✖ Remove"))
+            self.tree.item(item_iid, tags=("TRIO_SOURCE",))
+            
+            # Clear trio fields
+            self.trio_inv_paths.clear()
+            self.trio_hbl_paths.clear()
+            self.trio_mbl_path = ""
+            self.var_trio_inv.set("")
+            self.var_trio_hbl.set("")
+            self.var_trio_mbl.set("")
+            messagebox.showinfo("Success", f"Extracted {len(combined_records)} container(s) from Trio.")
+
+        except Exception as e:
+            logger.exception("Trio extraction failed")
+            messagebox.showerror("Extraction Error", str(e))
+
     def _on_clear_list(self) -> None:
         self.files_by_dir.clear()
         self.parsed_records.clear()
@@ -554,6 +809,9 @@ class DSRGeneratorApp:
         
         total_files = sum(len(flist) for flist in self.files_by_dir.values())
         self.lbl_file_status.config(text=f"{total_files} file(s) across {len(self.files_by_dir)} folder(s)")
+
+        # To detect duplicates
+        seen_combos = {} # (containers_str, bl_no) -> list of iids
 
         for directory, files in self.files_by_dir.items():
             # Identify BL vs Invoice
@@ -586,11 +844,14 @@ class DSRGeneratorApp:
             all_invoice_stems = []
             
             for inv_f in invoice_pdf_files:
-                matches = re.findall(r"\b([45]\d{7})\b", inv_f.stem)
-                # Also try 8-digit numbers starting with 7 or 8 (Skoda AS format)
-                if not matches:
-                    matches = re.findall(r"\b(\d{8})\b", inv_f.stem)
-                inv_no = matches[0] if matches else inv_f.stem
+                # Improved Invoice extraction: handle 8-10 digit numbers
+                matches = re.findall(r"\b(\d{8,10})\b", inv_f.stem)
+                if matches:
+                    inv_no = "/".join(dict.fromkeys(matches))
+                else:
+                    # Fallback: take the first part before hyphen/dot
+                    inv_no = re.split(r"[-.]", inv_f.stem)[0]
+                
                 all_invoice_stems.append(inv_no)
                 
                 try:
@@ -600,9 +861,11 @@ class DSRGeneratorApp:
                     
                     found_containers = set(re.findall(r"\b([A-Z]{4}\d{7})\b", text_all))
                     
-                    # Detect Supplier from Invoice Content
+                    # Detect Supplier from Invoice Content (Priority Check)
                     detected_supplier = None
-                    if "AUDI HUNGARIA" in text_all:
+                    if "PREMIUM SOUND" in text_all:
+                        detected_supplier = "PREMIUM SOUND SOLUTIONS SDN BHD"
+                    elif "AUDI HUNGARIA" in text_all:
                         detected_supplier = "AUDI HUNGARIA ZRT."
                     elif "VOLKSWAGEN AG" in text_all:
                         detected_supplier = "VOLKSWAGEN AG"
@@ -638,7 +901,8 @@ class DSRGeneratorApp:
 
             if not bl_files:
                 status = "Error: No BL found"
-                self.tree.insert("", "end", values=(directory.name, f"{len(files)} files", status, containers_str, invoices_str, bl_no))
+                item_iid = self.tree.insert("", "end", values=(directory.name, f"{len(files)} files", status, containers_str, invoices_str, bl_no, "✖ Remove"))
+                self.tree.item(item_iid, tags=(str(directory),)) # Save path in tags
                 continue
                 
             # Apply invoice mappings to the parsed base records
@@ -679,30 +943,86 @@ class DSRGeneratorApp:
 
             if dir_records:
                 containers_str = ", ".join(r.container_no for r in dir_records)
-                bl_nos = list(dict.fromkeys(r.bl_no for r in dir_records))
+                bl_nos = list(dict.fromkeys(self._format_bl_number(r.bl_no) for r in dir_records))
                 bl_no = ", ".join(bl_nos)
+
+            item_iid = self.tree.insert("", "end", values=(directory.name, f"{len(files)} PDFs", status, containers_str, invoices_str, bl_no, "✖ Remove"))
+            self.tree.item(item_iid, tags=(str(directory),)) # Hide exact path in tags
+
+            # Duplicate Highlighting Logic
+            combo_key = f"{containers_str}|{bl_no}"
+            if combo_key in seen_combos:
+                # This is a duplicate. Mark both the previous ones and this one.
+                for prev_iid in seen_combos[combo_key]:
+                    existing_tags = list(self.tree.item(prev_iid, "tags"))
+                    if "duplicate" not in existing_tags:
+                        self.tree.item(prev_iid, tags=tuple(existing_tags + ["duplicate"]))
+                
+                existing_tags = list(self.tree.item(item_iid, "tags"))
+                self.tree.item(item_iid, tags=tuple(existing_tags + ["duplicate"]))
+                seen_combos[combo_key].append(item_iid)
+            else:
+                seen_combos[combo_key] = [item_iid]
+
+    def _on_tree_click(self, event) -> None:
+        """Handles removal of a row if the 'Action' column is clicked."""
+        region = self.tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
             
-            self.tree.insert("", "end", values=(directory.name, f"{len(files)} PDFs", status, containers_str, invoices_str, bl_no))
+        column = self.tree.identify_column(event.x)
+        if column == "#7": # Action column
+            item_iid = self.tree.identify_row(event.y)
+            if not item_iid:
+                return
+            
+            item_tags = self.tree.item(item_iid, "tags") or []
+            
+            # Identify if it's a Trio entry (tag "TRIO_SOURCE") or a standard one (tag is directory string)
+            if "TRIO_SOURCE" in item_tags:
+                if messagebox.askyesno("Remove", "Remove this Trio extraction row?"):
+                    # For Trio, we need to find and remove the specific records from parsed_records
+                    # This is trickier since TRIO doesn't map to a single dir.
+                    # Simple approach: remove by row contents match (container_no + bl_no)
+                    values = self.tree.item(item_iid, "values")
+                    target_containers = values[3].split(", ")
+                    target_bl = values[5]
+                    
+                    self.parsed_records = [r for r in self.parsed_records if not (r.container_no in target_containers and r.bl_no == target_bl)]
+                    self.tree.delete(item_iid)
+            else:
+                # Standard folder/file removal
+                if not item_tags:
+                    return
+                dir_str = item_tags[0]
+                dir_path = Path(dir_str)
+                if dir_path in self.files_by_dir:
+                    if messagebox.askyesno("Remove", f"Remove selection for '{dir_path.name}'?"):
+                        # Remove files from mapping
+                        del self.files_by_dir[dir_path]
+                        # Re-parse everything else to keep parity
+                        self._parse_and_refresh()
 
     def _on_review(self) -> None:
         if not self.parsed_records:
             messagebox.showwarning("No Data", "No valid parsed container records to review.")
             return
             
-        # Before spawning preview, explicitly assign global manual settings to ALL the records
         global_user = self.var_user.get().strip()
         global_month = self.var_month.get().strip()
-        global_pre = self.cal_pre_alert.get()
-        global_eta = self.cal_vessel_eta.get()
-        global_bl_type = self.var_bl_type.get()
+        global_pre = self.cal_pre_alert.get().strip()
+        global_eta = self.cal_vessel_eta.get().strip()
         global_bl_mode = self.var_mode.get()
+        
+        if not global_pre or not global_eta:
+            messagebox.showwarning("Input Required", "Please select 'Pre-alert Receive Date' and 'Vessel ETA' first.")
+            return
         
         for r in self.parsed_records:
             r.user = global_user
             r.user_month = global_month
             r.pre_alert_date = global_pre
             r.vessel_eta = global_eta
-            r.bl_type = global_bl_type
             r.bl_mode = global_bl_mode
 
         # Pop up the Data Review modal. 
@@ -712,7 +1032,7 @@ class DSRGeneratorApp:
         """Called after user finishes editing/confirming in the Review window."""
         self.confirmed_records = list(self.parsed_records)
         self.btn_push.config(state="normal", cursor="hand2")
-        messagebox.showinfo("Ready", "Data confirmed! You can now click '2. Push to Zoho & Export'.")
+        messagebox.showinfo("Ready", "Data confirmed! You can now click '2. Push to Shakti & Export'.")
 
     def _get_existing_invoices(self) -> set[tuple[str, str]]:
         """Reads the local Master DSR and returns a set of (Container No, Invoice No) tuples."""
@@ -781,7 +1101,7 @@ class DSRGeneratorApp:
             success, msg = zoho.push_records(records_to_process)
             
             if not success:
-                messagebox.showerror("Zoho Push Failed", f"Excel export aborted because Zoho push failed:\n\n{msg}")
+                messagebox.showerror("Shakti Push Failed", f"Excel export aborted because Shakti push failed:\n\n{msg}")
                 return
                 
             zoho_msg = f"Zoho API: {msg}"
@@ -811,6 +1131,20 @@ class DSRGeneratorApp:
 
     # ── Excel Export Logic ───────────────────────────────────────────────
 
+    def _format_bl_number(self, bl_num_str: str) -> str:
+        """Strips 'MAEU' prefix from Maersk BLs, keeps others."""
+        if not bl_num_str:
+            return ""
+        parts = bl_num_str.split('/')
+        formatted_parts = []
+        for part in parts:
+            part = part.strip()
+            if part.upper().startswith("MAEU"):
+                formatted_parts.append(part[4:]) # Strip MAEU
+            else:
+                formatted_parts.append(part)
+        return "/".join(formatted_parts)
+
     def _record_to_row(self, rec: ContainerRecord) -> list:
         row = [""] * len(DSR_HEADERS)
         
@@ -837,7 +1171,16 @@ class DSRGeneratorApp:
         row[9] = rec.container_no
         row[10] = rec.container_size
         row[11] = rec.container_type
-        row[13] = rec.bl_no
+        
+        # BL No Column (N) - Combined Pattern (MBL/HBL) as requested
+        mbl_formatted = self._format_bl_number(rec.mbl_no)
+        hbl_formatted = self._format_bl_number(rec.hbl_no)
+
+        if mbl_formatted and hbl_formatted:
+            row[13] = f"{mbl_formatted}/{hbl_formatted}"
+        else:
+            row[13] = self._format_bl_number(rec.bl_no) # Fallback to general bl_no, also formatted
+            
         row[14] = rec.supplier_name
         row[15] = rec.invoice_nos
         row[16] = rec.inco_terms
