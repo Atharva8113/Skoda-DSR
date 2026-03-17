@@ -394,35 +394,57 @@ class DSRGeneratorApp:
         self.confirmed_records: list[ContainerRecord] = []
         self.master_dsr_path: Path = MASTER_FILE_PATH
         self.logo_img = None
-        self.tree: ttk.Treeview = None # type: ignore
-        self.lbl_file_status: tk.Label = None # type: ignore
-        self.cb_user: ttk.Combobox = None # type: ignore
-        self.cal_pre_alert: BetterDateEntry = None # type: ignore
-        self.cal_vessel_eta: BetterDateEntry = None # type: ignore
-        self.cb_month: ttk.Combobox = None # type: ignore
-        self.cb_mode: ttk.Combobox = None # type: ignore
-        self.entry_branch: ttk.Entry = None # type: ignore
-        self.btn_review: tk.Button = None # type: ignore
-        self.btn_push: tk.Button = None # type: ignore
-
-        self.var_trio_inv = tk.StringVar()  # Display: basenames
-        self.var_trio_hbl = tk.StringVar()  # Display: basenames
-        self.var_trio_mbl = tk.StringVar()  # Display: basename
         
+        # Trio UI Variables
+        self.var_trio_inv = tk.StringVar()
+        self.var_trio_hbl = tk.StringVar()
+        self.var_trio_mbl = tk.StringVar()
         self.trio_inv_paths: list[str] = []
         self.trio_hbl_paths: list[str] = []
         self.trio_mbl_path: str = ""
         
+        # Zoho UI Variables
+        self.var_zoho_file = tk.StringVar()
+        self.lbl_zoho_status: tk.Label = None # type: ignore
+
         self.var_user = tk.StringVar(value="Ashish (CSN)")
         self.var_month = tk.StringVar()
         self.var_mode = tk.StringVar(value="Sea (FCL)")
         self.var_branch = tk.StringVar(value="MUMBAI")
 
+        # UI Widget Attributes
+        self.tree: ttk.Treeview = None  # type: ignore
+        self.lbl_file_status: tk.Label = None  # type: ignore
+        self.cb_user: ttk.Combobox = None  # type: ignore
+        self.cal_pre_alert: BetterDateEntry = None  # type: ignore
+        self.cal_vessel_eta: BetterDateEntry = None  # type: ignore
+        self.cb_month: ttk.Combobox = None  # type: ignore
+        self.cb_mode: ttk.Combobox = None  # type: ignore
+        self.entry_branch: ttk.Entry = None  # type: ignore
+        self.btn_review: tk.Button = None  # type: ignore
+        self.btn_push: tk.Button = None  # type: ignore
+        self.btn_convert_zoho: tk.Button = None  # type: ignore
+        self.footer_btn_frame: tk.Frame = None  # type: ignore
+
         self._load_logo()
         self._build_header()
-        self._build_file_selection()
-        self._build_manual_settings()
-        self._build_preview()
+        
+        # Main Tab Container
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        # Tab 1: DSR Extractor (Existing logic)
+        self.tab_extractor = tk.Frame(self.notebook, bg=WHITE)
+        self.notebook.add(self.tab_extractor, text="  PDF DSR Extractor  ")
+        self._build_extractor_tab()
+
+        # Tab 2: Zoho Converter (NEW)
+        self.tab_zoho = tk.Frame(self.notebook, bg=WHITE)
+        self.notebook.add(self.tab_zoho, text="  Zoho Converter  ")
+        self._build_zoho_tab()
+
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
         self._build_footer()
 
     def _load_logo(self) -> None:
@@ -458,8 +480,13 @@ class DSRGeneratorApp:
             font=("Segoe UI", 11), fg="#6c757d", bg=WHITE
         ).pack(pady=(2, 0))
 
-    def _build_file_selection(self) -> None:
-        file_selection_frame = ttk.LabelFrame(self.root, text="File Selection", padding=(10, 8))
+    def _build_extractor_tab(self) -> None:
+        self._build_file_selection(self.tab_extractor)
+        self._build_manual_settings(self.tab_extractor)
+        self._build_preview(self.tab_extractor)
+
+    def _build_file_selection(self, parent_frame: tk.Frame) -> None:
+        file_selection_frame = ttk.LabelFrame(parent_frame, text="File Selection", padding=(10, 8))
         file_selection_frame.pack(fill="x", padx=20, pady=5)
 
         # Simplified Selection: Only Trio Match
@@ -490,8 +517,8 @@ class DSRGeneratorApp:
         self.lbl_file_status = tk.Label(sel_box, text="Ready", font=("Segoe UI", 8), fg="#6c757d", bg="#F8F9FA")
         self.lbl_file_status.pack(side="left", pady=(5,0))
 
-    def _build_manual_settings(self) -> None:
-        frame = ttk.LabelFrame(self.root, text="Manual / Shakti Fields", padding=(10, 8))
+    def _build_manual_settings(self, parent_frame: tk.Frame) -> None:
+        frame = ttk.LabelFrame(parent_frame, text="Manual / Shakti Fields", padding=(10, 8))
         frame.pack(fill="x", padx=20, pady=5)
         
         inner = tk.Frame(frame, bg=WHITE)
@@ -528,8 +555,8 @@ class DSRGeneratorApp:
         self.entry_branch.grid(row=1, column=3, sticky="w", padx=5, pady=5)
 
 
-    def _build_preview(self) -> None:
-        frame = ttk.LabelFrame(self.root, text="Data Preview / Processing Queue", padding=(10, 8))
+    def _build_preview(self, parent_frame: tk.Frame) -> None:
+        frame = ttk.LabelFrame(parent_frame, text="Data Preview / Processing Queue", padding=(10, 8))
         frame.pack(fill="both", expand=True, padx=20, pady=5)
 
         columns = ("Directory", "Files", "Status", "Parsed Container(s)", "Invoice Nos", "BL No", "Action")
@@ -559,8 +586,10 @@ class DSRGeneratorApp:
         
         tk.Label(footer, text="© Nagarkot Forwarders Pvt Ltd", font=("Segoe UI", 8), fg="#6c757d", bg=WHITE).pack(side="left")
         
-        btn_frame = tk.Frame(footer, bg=WHITE)
-        btn_frame.pack(side="right")
+        self.footer_btn_frame = tk.Frame(footer, bg=WHITE)
+        self.footer_btn_frame.pack(side="right")
+
+        btn_frame = self.footer_btn_frame # Keep reference compatibility
 
         self.btn_review = tk.Button(
             btn_frame, text="1. Review & Confirm Data", font=("Segoe UI", 10, "bold"),
@@ -577,6 +606,256 @@ class DSRGeneratorApp:
             command=self._on_push_and_export, state="disabled"
         )
         self.btn_push.pack(side="left")
+
+    def _on_tab_changed(self, event) -> None:
+        """Shows/hides footer buttons based on the active tab."""
+        # index 0 = Extractor, index 1 = Zoho
+        selected_idx = self.notebook.index(self.notebook.select())
+        if selected_idx == 0:
+            self.footer_btn_frame.pack(side="right")
+        else:
+            self.footer_btn_frame.pack_forget()
+
+    def _build_zoho_tab(self) -> None:
+        """Builds the UI for converting Zoho Exported Excel files."""
+        container = tk.Frame(self.tab_zoho, bg=WHITE)
+        container.pack(fill="both", expand=True, padx=40, pady=40)
+
+        card = tk.Frame(container, bg=BG_LIGHT, bd=1, relief="solid")
+        card.pack(pady=20, padx=20, ipadx=20, ipady=20)
+
+        tk.Label(
+            card, text="Zoho Export Converter", 
+            font=("Segoe UI", 16, "bold"), fg=BTN_BLUE, bg=BG_LIGHT
+        ).pack(pady=(0, 10))
+
+        tk.Label(
+            card, text="Select the Excel file exported from Zoho to generate user-wise DSRs.",
+            font=("Segoe UI", 10), bg=BG_LIGHT, fg="#6c757d"
+        ).pack(pady=(0, 20))
+
+        sel_row = tk.Frame(card, bg=BG_LIGHT)
+        sel_row.pack(fill="x", pady=10)
+
+        tk.Button(
+            sel_row, text="Browse Zoho Excel", font=("Segoe UI", 10),
+            width=20, command=self._on_select_zoho_file, cursor="hand2"
+        ).pack(side="left", padx=5)
+
+        tk.Entry(
+            sel_row, textvariable=self.var_zoho_file, font=("Segoe UI", 10), 
+            width=60, state="readonly"
+        ).pack(side="left", padx=5)
+
+        action_row = tk.Frame(card, bg=BG_LIGHT)
+        action_row.pack(fill="x", pady=30)
+
+        self.btn_convert_zoho = tk.Button(
+            action_row, text="CONVERT & GENERATE EXCELS", font=("Segoe UI", 12, "bold"),
+            bg="#28A745", fg=WHITE, width=35, height=2, cursor="hand2",
+            command=self._on_convert_zoho
+        )
+        self.btn_convert_zoho.pack(anchor="center")
+
+        self.lbl_zoho_status = tk.Label(
+            card, text="Status: Ready", font=("Segoe UI", 9, "italic"),
+            bg=BG_LIGHT, fg="#28A745"
+        )
+        self.lbl_zoho_status.pack(pady=10)
+
+        # Instructions
+        info_frame = tk.Frame(container, bg=WHITE)
+        info_frame.pack(fill="x", pady=20)
+        
+        info_text = (
+            "How it works:\n"
+            "1. Upload the Zoho export file.\n"
+            "2. The tool splits records by User: Ashish (CSn.xlsx), Ranjit (pune.xlsx), CLC (CLC dsr.xlsx).\n"
+            "3. Each Excel will have two sheets: 'Live shipments' and 'Cleared shipments'.\n"
+            "4. Logic: Records with a 'Dispatch Date' go to 'Cleared', others to 'Live'."
+        )
+        tk.Label(
+            info_frame, text=info_text, font=("Segoe UI", 9),
+            justify="left", bg=WHITE, fg="#6c757d"
+        ).pack(anchor="w")
+
+    def _on_select_zoho_file(self) -> None:
+        f = filedialog.askopenfilename(
+            title="Select Zoho Export Excel",
+            filetypes=[("Excel Files", "*.xlsx *.xls")]
+        )
+        if f:
+            self.var_zoho_file.set(f)
+            self.lbl_zoho_status.config(text=f"Selected: {Path(f).name}", fg=BTN_BLUE)
+
+    def _on_convert_zoho(self) -> None:
+        file_path = self.var_zoho_file.get()
+        if not file_path:
+            messagebox.showwarning("File Missing", "Please select a Zoho export file first.")
+            return
+
+        try:
+            self.lbl_zoho_status.config(text="Processing... Please wait", fg="#f39c12")
+            self.root.update_idletasks()
+
+            input_path = Path(file_path)
+            wb_in = openpyxl.load_workbook(input_path, data_only=True)
+            sheet = wb_in.active
+            
+            headers = [str(cell.value).strip() if cell.value else "" for cell in sheet[1]]
+            
+            # Map headers to indices
+            h_map = {h: i for i, h in enumerate(headers) if h}
+            
+            # Define Zoho to Master mapping based on analysis
+            zoho_map = {
+                "User": "User",
+                "Pre-alert Receive date": "Pre-alert Receive date",
+                "Month": "Month",
+                "FF/ Shipping Line": "FF/ Shipping Line",
+                "Port of Loading": "Port of Loading",
+                "Vessel Name": "Vessel Name",
+                "BL Date": "BL Date",
+                "Vessel ETA": "Vessel ETA",
+                "BL No.": "BL No.",
+                "CHA Job No.": "CHA Job No.",
+                "Current Status": "Current Status",
+                "Supplier Name": "Supplier Name",
+                "INCO": "INCO",
+                "CFS Name": "CFS Name",
+                "IGM No.": "IGM No.",
+                "IGM No. Date": "IGM No. Date",
+                "IGM Inward Date": "IGM Inward Date",
+                "B/E No": "B/E No",
+                "B/E Date": "B/E Date",
+                "AO Ass": "AO Ass",
+                "AC Assess": "AC Assess",
+                "RMS/ Examine": "RMS/ Examine",
+                "Duty Request recd from CHA": "Duty Request recd from CHA",
+                "Duty paid date": "Duty Paid date",
+                "Assessable Value": "Assessable Value",
+                "Debit Duty (RODTEP)": "Debit Duty (RODTEP)",
+                "Total Duty": "Total Duty",
+                "DUTY%": "DUTY%",
+                "Stamp Duty": "STAMP DUTY",
+                "Interest (IfAny)": "Interest (IfAny)",
+                "Penalty (Ifany)": "Penalty (Ifany)",
+                "Reason for Interest / Penalty": "Reason for Interest/Penalty",
+                "OOC Date": "OOC Date",
+                "Remarks (Daywise Cronology)": "Remarks (Daywise Cronology)",
+                "Clearance TAT": "Clearnace TAT",
+                "Reason for Clearance TAT Delay": "Reason for Clearance TAT delay",
+                "Detention/Demurrage (IfAny)": "Detention/Demurrage (IfAny)",
+                "Total BCD Value": "Total BCD Value",
+                "Total SWS Value": "Total SWS Value",
+                "Total IGST Value": "Total IGST Value",
+                "STAMP DUTY PAID DT": "STAMP DUTY PAID DT",
+                "Under Protest": "Under Protest",
+                "BOE filing TAT": "BOE filing TAT",
+                "Reason for BOE filing TAT Delay": "Reason for BOE filing TAT delay",
+                "Container arrival date in CFS": "Conatainer arrival date in CFS",
+                "OOC COPY RECD YES/NO": "OOC COPY RECD YES/NO",
+                "SIMS Registration date": "SIMS Registration date",
+                "Remarks": "Remarks",
+                "Container Details - Skoda Container No": "Container No.",
+                "Container Details - Container Size": "Size (20'40' LCL)",
+                "Container Details - Container Type": "Container Type (HQ,DV,SD)",
+                "Container Details - Gross Wt": "GrossWt",
+                "Container Details - No of Pkgs": "No.of Pkg.",
+                "Container Details - Skoda Invoice No": "Invoice No.",
+                "Container Details - Skoda Dispatch Date": "Dispatch date to plant/WH",
+                "Container Details - Skoda Transporter": "Transporter",
+                "Container Details - Skoda E-Waybill No": "E-Waybill No."
+            }
+
+            # Master column names to their indices
+            master_h_to_idx = {h: i for i, h in enumerate(DSR_HEADERS)}
+            
+            # User to filename mapping
+            user_files = {
+                "Ashish (CSN)": "CSn.xlsx",
+                "Ranjit (PUNE)": "pune.xlsx",
+                "CLC / After sales": "CLC dsr.xlsx"
+            }
+            
+            # Subsets for each user
+            user_data = {u: [] for u in user_files}
+            
+            rows = list(sheet.iter_rows(min_row=2, values_only=True))
+            for r_vals in rows:
+                if not any(r_vals): continue
+                
+                # Extract user
+                u_val = str(r_vals[h_map["User"]]).strip() if "User" in h_map else ""
+                if u_val not in user_data:
+                    # Handle unknown users or mismatches if any
+                    continue
+                
+                # Build master row
+                m_row = [""] * len(DSR_HEADERS)
+                for z_h, m_h in zoho_map.items():
+                    if z_h in h_map:
+                        val = r_vals[h_map[z_h]]
+                        if m_h in master_h_to_idx:
+                            m_row[master_h_to_idx[m_h]] = val
+                
+                # Special cases: CHA JOB NO index 48 (duplicate in master)
+                if "CHA Job No." in h_map:
+                    val = r_vals[h_map["CHA Job No."]]
+                    if "CHA JOB NO" in master_h_to_idx:
+                         m_row[master_h_to_idx["CHA JOB NO"]] = val
+
+                user_data[u_val].append(m_row)
+
+            # Generate files
+            out_dir = SCRIPT_DIR
+            generated = []
+
+            for user, rows in user_data.items():
+                if not rows: continue
+                
+                fname = user_files[user]
+                fpath = out_dir / fname
+                
+                wb_out = openpyxl.Workbook()
+                # Create Sheets
+                ws_live = wb_out.active
+                ws_live.title = "Live shipments"
+                ws_cleared = wb_out.create_sheet("Cleared shipments")
+                
+                # Headers
+                ws_live.append(DSR_HEADERS)
+                ws_cleared.append(DSR_HEADERS)
+                
+                # Data Distribution
+                dispatch_date_idx = master_h_to_idx.get("Dispatch date to plant/WH", -1)
+                
+                for r in rows:
+                    is_cleared = False
+                    if dispatch_date_idx != -1:
+                        d_val = r[dispatch_date_idx]
+                        if d_val and str(d_val).strip():
+                            is_cleared = True
+                    
+                    if is_cleared:
+                        ws_cleared.append(r)
+                    else:
+                        ws_live.append(r)
+                
+                self._apply_dsr_styling(ws_live)
+                self._apply_dsr_styling(ws_cleared)
+                
+                wb_out.save(fpath)
+                generated.append(fname)
+
+            self.lbl_zoho_status.config(text="Success: Files Generated!", fg="#28A745")
+            msg = "The following files were created in the application directory:\n\n" + "\n".join(generated)
+            messagebox.showinfo("Conversion Complete", msg)
+
+        except Exception as e:
+            logger.exception("Zoho conversion failed")
+            self.lbl_zoho_status.config(text="Error occurred", fg="red")
+            messagebox.showerror("Error", f"Failed to convert Zoho file:\n{str(e)}")
 
     def _on_select_pdfs(self) -> None:
         files = filedialog.askopenfilenames(
