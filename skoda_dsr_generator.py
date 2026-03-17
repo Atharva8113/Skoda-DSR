@@ -435,12 +435,12 @@ class DSRGeneratorApp:
 
         # Tab 1: DSR Extractor (Existing logic)
         self.tab_extractor = tk.Frame(self.notebook, bg=WHITE)
-        self.notebook.add(self.tab_extractor, text="  PDF DSR Extractor  ")
+        self.notebook.add(self.tab_extractor, text="  Invoice, MBL, HBL Extractor  ")
         self._build_extractor_tab()
 
         # Tab 2: Zoho Converter (NEW)
         self.tab_zoho = tk.Frame(self.notebook, bg=WHITE)
-        self.notebook.add(self.tab_zoho, text="  Zoho Converter  ")
+        self.notebook.add(self.tab_zoho, text="  Shakti export file to DSR's  ")
         self._build_zoho_tab()
 
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
@@ -503,13 +503,13 @@ class DSRGeneratorApp:
         tk.Button(row, text="Select Invoice", width=12, command=lambda: self._select_trio_file("inv")).pack(side="left", padx=2)
         tk.Entry(row, textvariable=self.var_trio_inv, width=30, font=("Segoe UI", 9)).pack(side="left", padx=2)
         
-        # HBL
-        tk.Button(row, text="Select HBL", width=12, command=lambda: self._select_trio_file("hbl")).pack(side="left", padx=10)
-        tk.Entry(row, textvariable=self.var_trio_hbl, width=28, font=("Segoe UI", 9)).pack(side="left", padx=2)
-        
         # MBL
         tk.Button(row, text="Select MBL", width=12, command=lambda: self._select_trio_file("mbl")).pack(side="left", padx=10)
         tk.Entry(row, textvariable=self.var_trio_mbl, width=28, font=("Segoe UI", 9)).pack(side="left", padx=2)
+        
+        # HBL
+        tk.Button(row, text="Select HBL", width=12, command=lambda: self._select_trio_file("hbl")).pack(side="left", padx=10)
+        tk.Entry(row, textvariable=self.var_trio_hbl, width=28, font=("Segoe UI", 9)).pack(side="left", padx=2)
         
         tk.Button(row, text="Extract", bg="#28A745", fg=WHITE, font=("Segoe UI", 9, "bold"), width=15, height=1, command=self._on_process_trio).pack(side="right", padx=(10, 0))
         
@@ -625,12 +625,12 @@ class DSRGeneratorApp:
         card.pack(pady=20, padx=20, ipadx=20, ipady=20)
 
         tk.Label(
-            card, text="Zoho Export Converter", 
+            card, text="Shakti export file to DSR Converter", 
             font=("Segoe UI", 16, "bold"), fg=BTN_BLUE, bg=BG_LIGHT
         ).pack(pady=(0, 10))
 
         tk.Label(
-            card, text="Select the Excel file exported from Zoho to generate user-wise DSRs.",
+            card, text="Select the Excel file exported from Shakti to generate user-wise DSRs.",
             font=("Segoe UI", 10), bg=BG_LIGHT, fg="#6c757d"
         ).pack(pady=(0, 20))
 
@@ -638,7 +638,7 @@ class DSRGeneratorApp:
         sel_row.pack(fill="x", pady=10)
 
         tk.Button(
-            sel_row, text="Browse Zoho Excel", font=("Segoe UI", 10),
+            sel_row, text="Browse Shakti Excel", font=("Segoe UI", 10),
             width=20, command=self._on_select_zoho_file, cursor="hand2"
         ).pack(side="left", padx=5)
 
@@ -651,7 +651,7 @@ class DSRGeneratorApp:
         action_row.pack(fill="x", pady=30)
 
         self.btn_convert_zoho = tk.Button(
-            action_row, text="CONVERT & GENERATE EXCELS", font=("Segoe UI", 12, "bold"),
+            action_row, text="CONVERT & GENERATE DSR's", font=("Segoe UI", 12, "bold"),
             bg="#28A745", fg=WHITE, width=35, height=2, cursor="hand2",
             command=self._on_convert_zoho
         )
@@ -669,7 +669,7 @@ class DSRGeneratorApp:
         
         info_text = (
             "How it works:\n"
-            "1. Upload the Zoho export file.\n"
+            "1. Upload the ZohoShakti export file to DSR Converter export file.\n"
             "2. The tool splits records by User: Ashish (CSn.xlsx), Ranjit (pune.xlsx), CLC (CLC dsr.xlsx).\n"
             "3. Each Excel will have two sheets: 'Live shipments' and 'Cleared shipments'.\n"
             "4. Logic: Records with a 'Dispatch Date' go to 'Cleared', others to 'Live'."
@@ -681,7 +681,7 @@ class DSRGeneratorApp:
 
     def _on_select_zoho_file(self) -> None:
         f = filedialog.askopenfilename(
-            title="Select Zoho Export Excel",
+            title="Select Shakti Export Excel",
             filetypes=[("Excel Files", "*.xlsx *.xls")]
         )
         if f:
@@ -772,10 +772,11 @@ class DSRGeneratorApp:
             master_h_to_idx = {h: i for i, h in enumerate(DSR_HEADERS)}
             
             # User to filename mapping
+            curr_date = datetime.now().strftime("%d-%m-%y")
             user_files = {
-                "Ashish (CSN)": "CSn.xlsx",
-                "Ranjit (PUNE)": "pune.xlsx",
-                "CLC / After sales": "CLC dsr.xlsx"
+                "Ashish (CSN)": f"CSN - {curr_date}.xlsx",
+                "Ranjit (PUNE)": f"PUNE - {curr_date}.xlsx",
+                "CLC / After sales": f"CLC - {curr_date}.xlsx"
             }
             
             # Subsets for each user
@@ -948,6 +949,24 @@ class DSRGeneratorApp:
                  messagebox.showerror("No Data", "Could not extract container details from the provided BLs.")
                  return
 
+            # Auto-detect month from BL date
+            first_bl_date = next((r.bl_date for r in raw_recs if r.bl_date), None)
+            if first_bl_date:
+                try:
+                    dt_obj = None
+                    for fmt in ("%Y-%m-%d", "%d-%b-%Y"):
+                        try:
+                            dt_obj = datetime.strptime(first_bl_date, fmt)
+                            break
+                        except:
+                            continue
+                    if dt_obj:
+                        m_idx = dt_obj.strftime("%m")
+                        if m_idx in MONTH_MAP:
+                            self.var_month.set(MONTH_MAP[m_idx])
+                except:
+                    pass
+
             # Combine them
             
             # Identify MBL and HBL numbers (Formatted)
@@ -1057,7 +1076,16 @@ class DSRGeneratorApp:
             display_bl = base_recs[0].bl_no if base_recs else "None"
             all_invs_display = "/".join(dict.fromkeys(global_inv_nos))
             
-            item_iid = self.tree.insert("", "end", values=(f"TRIO ({total_files} Files)", f"{total_files} PDFs", "Parsed (Trio)", containers_str, all_invs_display, display_bl, "✖ Remove"))
+            # Get directory name from the first file path
+            dir_name = "Unknown"
+            if inv_paths:
+                dir_name = inv_paths[0].parent.name
+            elif hbl_paths:
+                dir_name = hbl_paths[0].parent.name
+            elif mbl_path:
+                dir_name = Path(mbl_path).parent.name
+
+            item_iid = self.tree.insert("", "end", values=(f"{dir_name} ({total_files} Files)", f"{total_files} PDFs", "Completed", containers_str, all_invs_display, display_bl, "✖ Remove"))
             self.tree.item(item_iid, tags=("TRIO_SOURCE",))
             
             # Clear trio fields
@@ -1067,7 +1095,7 @@ class DSRGeneratorApp:
             self.var_trio_inv.set("")
             self.var_trio_hbl.set("")
             self.var_trio_mbl.set("")
-            messagebox.showinfo("Success", f"Extracted {len(combined_records)} container(s) from Trio.")
+            messagebox.showinfo("Success", f"Extracted {len(combined_records)} container(s).")
 
         except Exception as e:
             logger.exception("Trio extraction failed")
