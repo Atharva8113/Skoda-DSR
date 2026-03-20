@@ -685,6 +685,27 @@ class DSRGeneratorApp:
             filetypes=[("Excel Files", "*.xlsx *.xls")]
         )
         if f:
+            try:
+                # Quick validation of the export format
+                wb = openpyxl.load_workbook(f, read_only=True, data_only=True)
+                sheet = wb.active
+                first_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True))
+                # Normalize headers: strip and convert to string
+                headers = [str(cell).strip() if cell else "" for cell in first_row]
+                
+                if "Container Details - Skoda Container No" not in headers:
+                    messagebox.showerror(
+                        "Invalid Export Format", 
+                        "please export seperate collumn container details excel from shakti"
+                    )
+                    self.lbl_zoho_status.config(text="Status: Error - Invalid Format", fg="red")
+                    self.var_zoho_file.set("")
+                    return
+                wb.close()
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not validate Excel file: {e}")
+                return
+
             self.var_zoho_file.set(f)
             self.lbl_zoho_status.config(text=f"Selected: {Path(f).name}", fg=BTN_BLUE)
 
@@ -706,6 +727,16 @@ class DSRGeneratorApp:
             
             # Map headers to indices
             h_map = {h: i for i, h in enumerate(headers) if h}
+            
+            # ─── Validation: Check for separate Container columns ─────────────────
+            if "Container Details - Skoda Container No" not in h_map:
+                messagebox.showerror(
+                    "Invalid Export Format", 
+                    "please export seperate collumn container details excel from shakti"
+                )
+                self.lbl_zoho_status.config(text="Status: Error - Invalid Format", fg="red")
+                return
+            # ──────────────────────────────────────────────────────────────────────
             
             # Define Zoho to Master mapping based on analysis
             zoho_map = {

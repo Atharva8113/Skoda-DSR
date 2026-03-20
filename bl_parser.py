@@ -178,7 +178,7 @@ def _parse_maersk(text: str, filename: str) -> list[ContainerRecord]:
         r"(?:[\w-]+\s+)?"                # Optional Seal/Extra Info (e.g. ML-DE2359372)
         r"(\d{2})\s+"                    # Size (20/40)
         r"(DRY|HIGH\s*CUBE|REEFER)\s+"   # Type keyword
-        r"(?:9'6\s+)?"                   # Optional height
+        r"(?:\d+'\d+(?:''|\"|')?\s+)?"   # Optional height (e.g. 9'6, 8'6, 9'6")
         r"(\d+)\s+(?:PACKAGES?|PALLETS?)\s+"  # Package/Pallet count
         r"([\d.,]+)\s+KGS",             # Weight
         re.IGNORECASE
