@@ -38,10 +38,24 @@ from PIL import Image, ImageTk
 from bl_parser import ContainerRecord, parse_bl
 from zoho_api import ZohoCreatorAPI
 
-# ─── Constants ───────────────────────────────────────────────────────────────
+# --- Path Handling for PyInstaller Bundle ---
+if getattr(sys, 'frozen', False):
+    # When running as an EXE (PyInstaller)
+    # 1. Bundled assets (logo) are in sys._MEIPASS (temporary folder)
+    # 2. Data files (Master DSR) should be next to the .exe for persistence
+    BUNDLE_DIR = Path(sys._MEIPASS)
+    SCRIPT_DIR = Path(sys.executable).parent
+    
+    LOGO_PATH = BUNDLE_DIR / "Nagarkot Logo.png"
+    # Fallback to Script Dir if logo isn't in bundle (for dev)
+    if not LOGO_PATH.exists():
+        LOGO_PATH = SCRIPT_DIR / "Nagarkot Logo.png"
+else:
+    # When running as a normal script
+    SCRIPT_DIR = Path(__file__).resolve().parent
+    BUNDLE_DIR = SCRIPT_DIR
+    LOGO_PATH = SCRIPT_DIR / "Nagarkot Logo.png"
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-LOGO_PATH = SCRIPT_DIR / "Nagarkot Logo.png"
 MASTER_FILE_PATH = SCRIPT_DIR / "SKODA_MASTER_DSR.xlsx"
 
 # DSR column headers in order (A → BF = 58 columns)
@@ -259,13 +273,14 @@ class ToolTip:
             tw.destroy()
 
 class DataPreviewWindow(tk.Toplevel):
-    def __init__(self, parent, records: list[ContainerRecord], on_confirm):
+    def __init__(self, parent, records: list[ContainerRecord], on_confirm, defaults: dict = None):
         super().__init__(parent)
         self.title("Review & Edit Extracted Data")
         self.geometry("1400x650")
         self.configure(bg=WHITE)
         self.records = records
         self.on_confirm = on_confirm
+        self.defaults = defaults or {}
         
         self.transient(parent)
         self.grab_set()
@@ -327,6 +342,18 @@ class DataPreviewWindow(tk.Toplevel):
             footer, text="Cancel", font=("Segoe UI", 10), width=15, 
             command=self.destroy
         ).pack(side="left")
+
+        tk.Button(
+            footer, text="+ Add Row", font=("Segoe UI", 10, "bold"),
+            bg="#28A745", fg=WHITE, width=15, cursor="hand2",
+            command=self._add_row
+        ).pack(side="left", padx=10)
+
+        tk.Button(
+            footer, text="✖ Remove Row", font=("Segoe UI", 10),
+            bg="#dc3545", fg=WHITE, width=15, cursor="hand2",
+            command=self._remove_row
+        ).pack(side="left", padx=10)
         
         tk.Button(
             footer, text="Confirm & Submit", font=("Segoe UI", 10, "bold"),
@@ -334,6 +361,47 @@ class DataPreviewWindow(tk.Toplevel):
             command=self._do_confirm
         ).pack(side="right")
         
+    def _add_row(self):
+        from bl_parser import ContainerRecord
+        new_rec = ContainerRecord()
+        
+        # Priority 1: Existing records for context
+        # Priority 2: Passed defaults from main window
+        if self.records:
+            ref = self.records[0]
+            new_rec.user = ref.user
+            new_rec.user_month = ref.user_month
+            new_rec.pre_alert_date = ref.pre_alert_date
+            new_rec.vessel_eta = ref.vessel_eta
+            new_rec.bl_mode = ref.bl_mode
+        elif self.defaults:
+            new_rec.user = self.defaults.get("user", "")
+            new_rec.user_month = self.defaults.get("user_month", "")
+            new_rec.pre_alert_date = self.defaults.get("pre_alert_date", "")
+            new_rec.vessel_eta = self.defaults.get("vessel_eta", "")
+            new_rec.bl_mode = self.defaults.get("bl_mode", "")
+        
+        self.records.append(new_rec)
+        vals = [getattr(new_rec, attr) for attr, _, _ in self.col_map]
+        item_id = self.tree.insert("", "end", values=vals)
+        self.tree.see(item_id)
+        self.tree.selection_set(item_id)
+
+    def _remove_row(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Select Row", "Please select a row to remove.")
+            return
+            
+        if messagebox.askyesno("Remove", "Remove the selected row?"):
+            # Remove from back to keep indices stable if multiple selected
+            items = list(selected)
+            items.sort(key=lambda x: self.tree.index(x), reverse=True)
+            for item in items:
+                idx = self.tree.index(item)
+                del self.records[idx]
+                self.tree.delete(item)
+
     def _on_double_click(self, event):
         row_id = self.tree.identify_row(event.y)
         col_id = self.tree.identify_column(event.x)
@@ -1342,10 +1410,6 @@ class DSRGeneratorApp:
                         self._parse_and_refresh()
 
     def _on_review(self) -> None:
-        if not self.parsed_records:
-            messagebox.showwarning("No Data", "No valid parsed container records to review.")
-            return
-            
         global_user = self.var_user.get().strip()
         global_month = self.var_month.get().strip()
         global_pre = self.cal_pre_alert.get().strip()
@@ -1355,6 +1419,14 @@ class DSRGeneratorApp:
         if not global_pre or not global_eta:
             messagebox.showwarning("Input Required", "Please select 'Pre-alert Receive Date' and 'Vessel ETA' first.")
             return
+
+        defaults = {
+            "user": global_user,
+            "user_month": global_month,
+            "pre_alert_date": global_pre,
+            "vessel_eta": global_eta,
+            "bl_mode": global_bl_mode
+        }
         
         for r in self.parsed_records:
             r.user = global_user
@@ -1364,7 +1436,7 @@ class DSRGeneratorApp:
             r.bl_mode = global_bl_mode
 
         # Pop up the Data Review modal. 
-        DataPreviewWindow(self.root, self.parsed_records, self._on_confirmation_complete)
+        DataPreviewWindow(self.root, self.parsed_records, self._on_confirmation_complete, defaults=defaults)
 
     def _on_confirmation_complete(self) -> None:
         """Called after user finishes editing/confirming in the Review window."""
