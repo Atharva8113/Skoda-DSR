@@ -38,23 +38,30 @@ from PIL import Image, ImageTk
 from bl_parser import ContainerRecord, parse_bl
 from zoho_api import ZohoCreatorAPI
 
-# --- Path Handling for PyInstaller Bundle ---
+
+# ─── PyInstaller Resource Helper ─────────────────────────────────────────────
+
+def resource_path(relative_path: str) -> Path:
+    """Get absolute path to resource, works for dev and for PyInstaller."""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    except AttributeError:
+        base_path = Path(os.path.abspath("."))
+    return base_path / relative_path
+
+
+# ─── Constants ───────────────────────────────────────────────────────────────
+
+# For bundled resources (logo) — looks inside the PyInstaller temp dir
+LOGO_PATH = resource_path("Nagarkot Logo.png")
+
+# For files that live next to the exe (master DSR, .env, output files)
+# When frozen, sys.executable points to the exe; otherwise use __file__
 if getattr(sys, 'frozen', False):
-    # When running as an EXE (PyInstaller)
-    # 1. Bundled assets (logo) are in sys._MEIPASS (temporary folder)
-    # 2. Data files (Master DSR) should be next to the .exe for persistence
-    BUNDLE_DIR = Path(sys._MEIPASS)
-    SCRIPT_DIR = Path(sys.executable).parent
-    
-    LOGO_PATH = BUNDLE_DIR / "Nagarkot Logo.png"
-    # Fallback to Script Dir if logo isn't in bundle (for dev)
-    if not LOGO_PATH.exists():
-        LOGO_PATH = SCRIPT_DIR / "Nagarkot Logo.png"
+    SCRIPT_DIR = Path(sys.executable).resolve().parent
 else:
-    # When running as a normal script
     SCRIPT_DIR = Path(__file__).resolve().parent
-    BUNDLE_DIR = SCRIPT_DIR
-    LOGO_PATH = SCRIPT_DIR / "Nagarkot Logo.png"
 
 MASTER_FILE_PATH = SCRIPT_DIR / "SKODA_MASTER_DSR.xlsx"
 
@@ -471,7 +478,7 @@ class DSRGeneratorApp:
         self.trio_hbl_paths: list[str] = []
         self.trio_mbl_path: str = ""
         
-        # Zoho UI Variables
+        # Shakti UI Variables
         self.var_zoho_file = tk.StringVar()
         self.lbl_zoho_status: tk.Label = None # type: ignore
 
@@ -506,7 +513,7 @@ class DSRGeneratorApp:
         self.notebook.add(self.tab_extractor, text="  Invoice, MBL, HBL Extractor  ")
         self._build_extractor_tab()
 
-        # Tab 2: Zoho Converter (NEW)
+        # Tab 2: Shakti Converter (NEW)
         self.tab_zoho = tk.Frame(self.notebook, bg=WHITE)
         self.notebook.add(self.tab_zoho, text="  Shakti export file to DSR's  ")
         self._build_zoho_tab()
@@ -551,7 +558,32 @@ class DSRGeneratorApp:
     def _build_extractor_tab(self) -> None:
         self._build_file_selection(self.tab_extractor)
         self._build_manual_settings(self.tab_extractor)
+        self._build_action_buttons(self.tab_extractor)
         self._build_preview(self.tab_extractor)
+
+    def _build_action_buttons(self, parent_frame: tk.Frame) -> None:
+        self.action_btn_frame = tk.Frame(parent_frame, bg=WHITE)
+        self.action_btn_frame.pack(fill="x", padx=20, pady=10)
+
+        # Container for the two main action buttons
+        btn_container = tk.Frame(self.action_btn_frame, bg=WHITE)
+        btn_container.pack(side="right")
+
+        self.btn_review = tk.Button(
+            btn_container, text="1. Review & Confirm Data", font=("Segoe UI", 10, "bold"),
+            bg="#f39c12", fg=WHITE, activebackground="#e67e22", activeforeground=WHITE,
+            width=25, height=2, borderwidth=0, cursor="hand2",
+            command=self._on_review
+        )
+        self.btn_review.pack(side="left", padx=10)
+
+        self.btn_push = tk.Button(
+            btn_container, text="2. Push to Shakti & Export", font=("Segoe UI", 10, "bold"),
+            bg=BTN_BLUE, fg=WHITE, activebackground="#004494", activeforeground=WHITE,
+            width=25, height=2, borderwidth=0, cursor="arrow",
+            command=self._on_push_and_export, state="disabled"
+        )
+        self.btn_push.pack(side="left")
 
     def _build_file_selection(self, parent_frame: tk.Frame) -> None:
         file_selection_frame = ttk.LabelFrame(parent_frame, text="File Selection", padding=(10, 8))
@@ -649,43 +681,17 @@ class DSRGeneratorApp:
         self.tree.bind("<Button-1>", self._on_tree_click)
 
     def _build_footer(self) -> None:
-        footer = tk.Frame(self.root, bg=WHITE, height=60)
-        footer.pack(fill="x", side="bottom", padx=20, pady=10)
+        footer = tk.Frame(self.root, bg=WHITE, height=40)
+        footer.pack(fill="x", side="bottom", padx=20, pady=5)
         
         tk.Label(footer, text="© Nagarkot Forwarders Pvt Ltd", font=("Segoe UI", 8), fg="#6c757d", bg=WHITE).pack(side="left")
-        
-        self.footer_btn_frame = tk.Frame(footer, bg=WHITE)
-        self.footer_btn_frame.pack(side="right")
-
-        btn_frame = self.footer_btn_frame # Keep reference compatibility
-
-        self.btn_review = tk.Button(
-            btn_frame, text="1. Review & Confirm Data", font=("Segoe UI", 10, "bold"),
-            bg="#f39c12", fg=WHITE, activebackground="#e67e22", activeforeground=WHITE,
-            width=25, height=2, borderwidth=0, cursor="hand2",
-            command=self._on_review
-        )
-        self.btn_review.pack(side="left", padx=10)
-
-        self.btn_push = tk.Button(
-            btn_frame, text="2. Push to Shakti & Export", font=("Segoe UI", 10, "bold"),
-            bg=BTN_BLUE, fg=WHITE, activebackground="#004494", activeforeground=WHITE,
-            width=25, height=2, borderwidth=0, cursor="arrow",
-            command=self._on_push_and_export, state="disabled"
-        )
-        self.btn_push.pack(side="left")
 
     def _on_tab_changed(self, event) -> None:
-        """Shows/hides footer buttons based on the active tab."""
-        # index 0 = Extractor, index 1 = Zoho
-        selected_idx = self.notebook.index(self.notebook.select())
-        if selected_idx == 0:
-            self.footer_btn_frame.pack(side="right")
-        else:
-            self.footer_btn_frame.pack_forget()
+        """Tab change logic can handle visibility if needed, but actions are embedded in Tab 1."""
+        pass
 
     def _build_zoho_tab(self) -> None:
-        """Builds the UI for converting Zoho Exported Excel files."""
+        """Builds the UI for converting Shakti Exported Excel files."""
         container = tk.Frame(self.tab_zoho, bg=WHITE)
         container.pack(fill="both", expand=True, padx=40, pady=40)
 
@@ -737,7 +743,7 @@ class DSRGeneratorApp:
         
         info_text = (
             "How it works:\n"
-            "1. Upload the ZohoShakti export file to DSR Converter export file.\n"
+            "1. Upload the Shakti export file to DSR Converter export file.\n"
             "2. The tool splits records by User: Ashish (CSn.xlsx), Ranjit (pune.xlsx), CLC (CLC dsr.xlsx).\n"
             "3. Each Excel will have two sheets: 'Live shipments' and 'Cleared shipments'.\n"
             "4. Logic: Records with a 'Dispatch Date' go to 'Cleared', others to 'Live'."
@@ -780,7 +786,7 @@ class DSRGeneratorApp:
     def _on_convert_zoho(self) -> None:
         file_path = self.var_zoho_file.get()
         if not file_path:
-            messagebox.showwarning("File Missing", "Please select a Zoho export file first.")
+            messagebox.showwarning("File Missing", "Please select a Shakti export file first.")
             return
 
         try:
@@ -806,7 +812,7 @@ class DSRGeneratorApp:
                 return
             # ──────────────────────────────────────────────────────────────────────
             
-            # Define Zoho to Master mapping based on analysis
+            # Define Shakti to Master mapping based on analysis
             zoho_map = {
                 "User": "User",
                 "Pre-alert Receive date": "Pre-alert Receive date",
@@ -953,9 +959,9 @@ class DSRGeneratorApp:
             messagebox.showinfo("Conversion Complete", msg)
 
         except Exception as e:
-            logger.exception("Zoho conversion failed")
+            logger.exception("Shakti conversion failed")
             self.lbl_zoho_status.config(text="Error occurred", fg="red")
-            messagebox.showerror("Error", f"Failed to convert Zoho file:\n{str(e)}")
+            messagebox.showerror("Error", f"Failed to convert Shakti file:\n{str(e)}")
 
     def _on_select_pdfs(self) -> None:
         files = filedialog.askopenfilenames(
@@ -1505,7 +1511,7 @@ class DSRGeneratorApp:
             if not messagebox.askyesno("Duplicates Found", f"{duplicate_count} records appear to be already in the Master DSR.\n\nContinue pushing {len(records_to_process)} records?"):
                 return
 
-        # 2. Push to Zoho
+        # 2. Push to Shakti
         try:
             zoho = ZohoCreatorAPI()
             success, msg = zoho.push_records(records_to_process)
@@ -1514,13 +1520,13 @@ class DSRGeneratorApp:
                 messagebox.showerror("Shakti Push Failed", f"Excel export aborted because Shakti push failed:\n\n{msg}")
                 return
                 
-            zoho_msg = f"Zoho API: {msg}"
+            shakti_msg = f"Shakti API: {msg}"
             
-        except Exception as ze:
-            messagebox.showerror("Zoho API Error", f"Excel export aborted due to API error:\n\n{ze}")
+        except Exception as se:
+            messagebox.showerror("Shakti API Error", f"Excel export aborted due to API error:\n\n{se}")
             return
 
-        # 3. If Zoho is successful, Update Master Excel
+        # 3. If Shakti is successful, Update Master Excel
         try:
             if MASTER_FILE_PATH.exists():
                 self._append_to_master(MASTER_FILE_PATH, records_to_process)
@@ -1529,7 +1535,7 @@ class DSRGeneratorApp:
                 self._create_new_dsr(MASTER_FILE_PATH, records_to_process)
                 excel_msg = "Master DSR created and data saved successfully!"
             
-            messagebox.showinfo("Success", f"{excel_msg}\n\n{zoho_msg}")
+            messagebox.showinfo("Success", f"{excel_msg}\n\n{shakti_msg}")
             
             # Reset workflow
             self.confirmed_records.clear()
@@ -1537,7 +1543,7 @@ class DSRGeneratorApp:
 
         except Exception as exc:
             logger.exception("Failed to update Master Excel")
-            messagebox.showerror("Excel Error", f"An error occurred after Zoho push while updating the Master file:\n{exc}")
+            messagebox.showerror("Excel Error", f"An error occurred after Shakti push while updating the Master file:\n{exc}")
 
     # ── Excel Export Logic ───────────────────────────────────────────────
 
