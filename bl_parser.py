@@ -46,6 +46,7 @@ class ContainerRecord:
     bl_mode: str = ""                # Global manual input
     hbl_no: str = ""                 # New field for combined scenario
     mbl_no: str = ""                 # New field for combined scenario
+    raw_mbl_no: str = ""             # Unsliced original MBL number
 
 
 def parse_bl(pdf_path: str | Path) -> list[ContainerRecord]:
@@ -127,6 +128,12 @@ def _parse_maersk(text: str, filename: str) -> list[ContainerRecord]:
             # Try to find any alphanumeric ID in filename
             fid_match = re.search(r"([A-Z0-9]{8,})", filename.upper())
             base.bl_no = fid_match.group(1) if fid_match else filename
+
+    if base.bl_no.isdigit() and len(base.bl_no) >= 9:
+        base.raw_mbl_no = f"MAEU{base.bl_no}"
+    else:
+        base.raw_mbl_no = base.bl_no
+
 
     # Vessel
     vessel_match = re.search(r"Vessel\s*\n\s*(.+?)(?:\n|Voyage)", text, re.DOTALL)
@@ -233,6 +240,7 @@ def _parse_maersk(text: str, filename: str) -> list[ContainerRecord]:
                 container_size=size,
                 container_type=ctype,
                 bl_no=base.bl_no,
+                raw_mbl_no=base.raw_mbl_no,
                 supplier_name=base.supplier_name,
                 inco_terms=base.inco_terms,
                 num_packages="0",
@@ -275,6 +283,9 @@ def _parse_hapag(text: str, filename: str) -> list[ContainerRecord]:
         base.bl_no = swb_match.group(1)
     elif filename.upper().startswith("HLCU"):
         base.bl_no = filename
+
+    base.raw_mbl_no = base.bl_no
+
 
     # Vessel and Voyage
     vessel_match = re.search(
@@ -411,6 +422,7 @@ def _parse_hapag(text: str, filename: str) -> list[ContainerRecord]:
                 container_size=default_size,
                 container_type=default_type,
                 bl_no=base.bl_no,
+                raw_mbl_no=base.raw_mbl_no,
                 supplier_name=base.supplier_name,
                 inco_terms=base.inco_terms,
                 num_packages=pkgs,
@@ -463,6 +475,9 @@ def _parse_evergreen(text: str, filename: str) -> list[ContainerRecord]:
         bl_alt = re.search(r"(EGLV\d{5,})", text, re.IGNORECASE)
         if bl_alt:
             base.bl_no = bl_alt.group(1).upper()
+            
+    base.raw_mbl_no = base.bl_no
+
 
     # Vessel Name
     # Evergreen often has "M.V. EVER ..." or "EVER ..."
@@ -534,6 +549,7 @@ def _parse_evergreen(text: str, filename: str) -> list[ContainerRecord]:
                 port_of_loading=base.port_of_loading,
                 bl_date=base.bl_date,
                 supplier_name=base.supplier_name,
+                raw_mbl_no=base.raw_mbl_no,
                 container_no=cno,
                 container_size=size,
                 container_type=ctype,

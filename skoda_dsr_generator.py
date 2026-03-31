@@ -879,9 +879,9 @@ class DSRGeneratorApp:
             # User to filename mapping
             curr_date = datetime.now().strftime("%d-%m-%y")
             user_files = {
-                "Ashish (CSN)": f"CSN - {curr_date}.xlsx",
-                "Ranjit (PUNE)": f"PUNE - {curr_date}.xlsx",
-                "CLC / After sales": f"CLC - {curr_date}.xlsx"
+                "Ashish (CSN)": f"{curr_date} - CSN.xlsx",
+                "Ranjit (PUNE)": f"{curr_date} - PUNE.xlsx",
+                "CLC / After sales": f"{curr_date} - CLC.xlsx"
             }
             
             # Subsets for each user
@@ -897,11 +897,24 @@ class DSRGeneratorApp:
                     # Handle unknown users or mismatches if any
                     continue
                 
+                # Date columns in Master DSR that need timestamp stripping
+                date_master_headers = {
+                    "Pre-alert Receive date", "BL Date", "Vessel ETA",
+                    "IGM No. Date", "IGM Inward Date", "B/E Date",
+                    "Duty Request recd from CHA", "Duty Paid date",
+                    "OOC Date", "Dispatch date to plant/WH",
+                    "STAMP DUTY PAID DT", "Conatainer arrival date in CFS",
+                    "SIMS Registration date",
+                }
+
                 # Build master row
                 m_row = [""] * len(DSR_HEADERS)
                 for z_h, m_h in zoho_map.items():
                     if z_h in h_map:
                         val = r_vals[h_map[z_h]]
+                        # Only clean date values for date columns
+                        if m_h in date_master_headers:
+                            val = self._clean_date(val)
                         if m_h in master_h_to_idx:
                             m_row[master_h_to_idx[m_h]] = val
                 
@@ -1076,6 +1089,7 @@ class DSRGeneratorApp:
             
             # Identify MBL and HBL numbers (Formatted)
             mbl_no_raw = mbl_recs[0].bl_no if mbl_recs else ""
+            mbl_raw_keep = mbl_recs[0].raw_mbl_no if mbl_recs else ""
             hbl_nos_list = list(dict.fromkeys(r.bl_no for r in hbl_recs_all))
             
             mbl_no = self._format_bl_number(mbl_no_raw)
@@ -1148,6 +1162,7 @@ class DSRGeneratorApp:
             for r in base_recs:
                 r.hbl_no = hbl_no_combined
                 r.mbl_no = mbl_no
+                r.raw_mbl_no = mbl_raw_keep
                 # Combined BL Pattern: MBL/HBL as requested
                 r.bl_no = f"{mbl_no}/{hbl_no_combined}" if mbl_no and hbl_no_combined else (mbl_no or hbl_no_combined)
                 
@@ -1561,29 +1576,38 @@ class DSRGeneratorApp:
                 formatted_parts.append(part)
         return "/".join(formatted_parts)
 
+    def _clean_date(self, val):
+        """Standardizes dates by stripping timestamps and returning date objects where possible."""
+        if not val:
+            return None
+        if isinstance(val, datetime):
+            return val.date()
+        if not isinstance(val, str):
+            return val
+            
+        # Strip timestamp if present "YYYY-MM-DD 00:00:00" or "DD-MMM-YYYY 00:00:00"
+        date_str = val.split(" ")[0] if " " in val else val
+        
+        # Try various formats
+        for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(date_str, fmt).date()
+            except ValueError:
+                continue
+        return date_str
+
     def _record_to_row(self, rec: ContainerRecord) -> list:
         row = [""] * len(DSR_HEADERS)
         
-        def _parse_dt(dt_str):
-            if not dt_str: return None
-            try: return datetime.strptime(dt_str, "%Y-%m-%d")
-            except: 
-                try: return datetime.strptime(dt_str, "%d-%b-%Y")
-                except: return dt_str
-
         row[0] = rec.user
-        row[1] = _parse_dt(rec.pre_alert_date)
+        row[1] = self._clean_date(rec.pre_alert_date)
         row[2] = rec.user_month
         row[3] = rec.shipping_line
         row[4] = rec.port_of_loading
         row[5] = rec.vessel_name
 
-        bl_dt = None
-        try: bl_dt = datetime.strptime(rec.bl_date, "%Y-%m-%d")
-        except: pass
-        row[6] = bl_dt if bl_dt else rec.bl_date
-
-        row[7] = _parse_dt(rec.vessel_eta)
+        row[6] = self._clean_date(rec.bl_date)
+        row[7] = self._clean_date(rec.vessel_eta)
         row[9] = rec.container_no
         row[10] = rec.container_size
         row[11] = rec.container_type
@@ -1630,14 +1654,28 @@ class DSRGeneratorApp:
         ws.freeze_panes = "A2"
 
         # Style data rows
+        # Explicit list of date columns (must match DSR_HEADERS exactly)
+        date_header_names = {
+            "Pre-alert Receive date", "BL Date", "Vessel ETA",
+            "IGM No. Date", "IGM Inward Date", "B/E Date",
+            "Duty Request recd from CHA", "Duty Paid date",
+            "OOC Date", "Dispatch date to plant/WH",
+            "STAMP DUTY PAID DT", "Conatainer arrival date in CFS",
+            "SIMS Registration date",
+        }
+        date_col_indices = [
+            i for i, h in enumerate(DSR_HEADERS, 1) if h in date_header_names
+        ]
+
         for row in ws.iter_rows(min_row=2):
             for cell in row:
                 cell.font = data_font
                 cell.alignment = data_align
                 cell.border = thin_border
-                # Date formats for columns B, G, H (1-indexed: 2, 7, 8)
-                if cell.column in (2, 7, 8):
-                    cell.number_format = "YYYY-MM-DD"
+                
+                # Apply date format DD-MM-YYYY to identified columns
+                if cell.column in date_col_indices:
+                    cell.number_format = "DD-MM-YYYY"
 
         # Auto-width
         for col_idx in range(1, len(DSR_HEADERS) + 1):
