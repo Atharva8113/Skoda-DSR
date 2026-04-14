@@ -1,0 +1,1 @@
+import sys, traceback; sys.path.insert(0, r'c:\Users\Admin\Documents\NAGARKOT\Documentation\Skoda 1702\Skoda DSR'); from skoda_dsr_generator import DSRGeneratorApp; import tkinter as tk; root = tk.Tk(); app = DSRGeneratorApp(root); app.var_zoho_file.set(r'c:\Users\Admin\Documents\NAGARKOT\Documentation\Skoda 1702\Skoda DSR\new clc\Skoda DSR (21).xlsx'); app._on_convert_zoho()

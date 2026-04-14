@@ -127,6 +127,71 @@ DSR_HEADERS: list[str] = [
     "SIMS Registration date",         # BF
 ]
 
+CLC_DSR_HEADERS: list[str | None] = [
+    "User",                           # A
+    "Pre-alert Receive date",         # B
+    "Month",                          # C
+    "FF/ Shipping Line",              # D
+    "Port of Loading",                # E
+    "Vessel Name",                    # F
+    "BL Date",                        # G
+    "Vessel ETA",                     # H
+    "CHA Job No.",                    # I
+    "Container No.",                  # J
+    "Size (20'40' LCL)",              # K
+    "Container Type (HQ,DV,SD)",      # L
+    "Current Status",                 # M
+    "BL No.",                         # N
+    "Supplier Name",                  # O
+    "Invoice No.",                    # P
+    "INCO",                           # Q
+    "No.of Pkg.",                     # R
+    "GrossWt",                        # S
+    "CFS Name",                       # T
+    "Checklist Recd date",            # U
+    "Checklist Approved date",        # V
+    "SIMS Registration date",         # W
+    "IGM No.",                        # X
+    "IGM No. Date",                   # Y
+    "IGM Inward Date",                # Z
+    "B/E No",                         # AA
+    "B/E Date",                       # AB
+    "AO Ass",                         # AC
+    "AC Assess",                      # AD
+    "RMS/ Examine",                   # AE
+    "TR-6 Challan",                   # AF
+    "Duty Request recd from CHA",     # AG
+    "Duty Paid date",                 # AH
+    "Assessable Value",               # AI
+    "Total Duty",                     # AJ
+    "DUTY%",                          # AK
+    "Debit Duty (RODTEP)",            # AL
+    "STAMP DUTY",                     # AM
+    "Interest (IfAny)",               # AN
+    "Penalty (Ifany)",                # AO
+    "OOC Date",                       # AP
+    "Dispatch date to plant/WH",      # AQ
+    "Remarks (Daywise Cronology)",    # AR
+    "Clearnace TAT",                  # AS
+    "E-Waybill No.",                  # AT
+    "Detention/Demurrage (IfAny)",    # AU
+    "Total BCD Value",                # AV
+    "Total SWS Value",                # AW
+    "Total IGST Value",               # AX
+    "CHA JOB NO",                     # AY
+    "CFS PAYMENT IN SCOPE (YES/NO)",  # AZ
+    "DO PAYMENT IN SCOPE (YES/NO)",   # BA
+    "Transporter",                    # BB
+    "STAMP DUTY PAID DT",             # BC
+    "Vessel ETA",                     # BD
+    "OOC COPY RECD YES/NO",           # BE
+    None,                             # BF (One column blank next OOC copy yes / no)
+    "BOE filing TAT",                 # BG
+    "Reason for Clearance TAT delay", # BH
+    "Reason for BOE filing TAT delay",# BI
+    "Conatainer arrival date in CFS", # BJ
+]
+
 MONTH_MAP = {
     "01": "JAN", "02": "FEB", "03": "MAR", "04": "APR",
     "05": "MAY", "06": "JUN", "07": "JUL", "08": "AUG",
@@ -889,7 +954,12 @@ class DSRGeneratorApp:
                 "Container Details - Skoda Invoice No": "Invoice No.",
                 "Container Details - Skoda Dispatch Date": "Dispatch date to plant/WH",
                 "Container Details - Skoda Transporter": "Transporter",
-                "Container Details - Skoda E-Waybill No": "E-Waybill No."
+                "Container Details - Skoda E-Waybill No": "E-Waybill No.",
+                "Checklist Recd date": "Checklist Recd date",
+                "Checklist Approved Date": "Checklist Approved date",
+                "TR-6 Challan": "TR-6 Challan",
+                "CFS PAYMENT IN SCOPE (YES/NO)": "CFS PAYMENT IN SCOPE (YES/NO)",
+                "DO PAYMENT IN SCOPE(YES/NO)": "DO PAYMENT IN SCOPE (YES/NO)"
             }
 
             # Master column names to their indices
@@ -916,38 +986,19 @@ class DSRGeneratorApp:
                     # Handle unknown users or mismatches if any
                     continue
                 
-                # Date columns in Master DSR that need timestamp stripping
-                date_master_headers = {
-                    "Pre-alert Receive date", "BL Date", "Vessel ETA",
-                    "IGM No. Date", "IGM Inward Date", "B/E Date",
-                    "Duty Request recd from CHA", "Duty Paid date",
-                    "OOC Date", "Dispatch date to plant/WH",
-                    "STAMP DUTY PAID DT", "Conatainer arrival date in CFS",
-                    "SIMS Registration date",
-                }
-
-                # Build master row
-                m_row = [""] * len(DSR_HEADERS)
-                for z_h, m_h in zoho_map.items():
-                    if z_h in h_map:
-                        val = r_vals[h_map[z_h]]
-                        # Only clean date values for date columns
-                        if m_h in date_master_headers:
-                            val = self._clean_date(val)
-                        if m_h in master_h_to_idx:
-                            m_row[master_h_to_idx[m_h]] = val
-                
-                # Special cases: CHA JOB NO index 48 (duplicate in master)
-                if "CHA Job No." in h_map:
-                    val = r_vals[h_map["CHA Job No."]]
-                    if "CHA JOB NO" in master_h_to_idx:
-                         m_row[master_h_to_idx["CHA JOB NO"]] = val
-
-                user_data[u_val].append(m_row)
+                # We just store the raw shakti row here
+                user_data[u_val].append(r_vals)
 
             # Generate files
             out_dir = SCRIPT_DIR
             generated = []
+
+            # User to headers mapping
+            user_headers = {
+                "Ashish (CSN)": DSR_HEADERS,
+                "Ranjit (PUNE)": DSR_HEADERS,
+                "CLC / After sales": CLC_DSR_HEADERS
+            }
 
             for user, rows in user_data.items():
                 if not rows: continue
@@ -955,20 +1006,93 @@ class DSRGeneratorApp:
                 fname = user_files[user]
                 fpath = out_dir / fname
                 
-                wb_out = openpyxl.Workbook()
-                # Create Sheets
-                ws_live = wb_out.active
-                ws_live.title = "Live shipments"
-                ws_cleared = wb_out.create_sheet("Cleared shipments")
+                headers_to_use = user_headers.get(user, DSR_HEADERS)
+                master_h_to_idx = {h: i for i, h in enumerate(headers_to_use) if h}
                 
-                # Headers
-                ws_live.append(DSR_HEADERS)
-                ws_cleared.append(DSR_HEADERS)
+                # Date and Numeric columns for this user
+                date_master_headers = {
+                    "Pre-alert Receive date", "BL Date", "Vessel ETA",
+                    "IGM No. Date", "IGM Inward Date", "B/E Date",
+                    "Duty Request recd from CHA", "Duty Paid date",
+                    "OOC Date", "Dispatch date to plant/WH",
+                    "STAMP DUTY PAID DT", "Conatainer arrival date in CFS",
+                    "SIMS Registration date", "Checklist Recd date", "Checklist Approved date",
+                }
+                
+                # Rows need to be rebuilt with the correct header count and mapping
+                user_rows_final = []
+                for shakti_vals in rows:
+                    # In rows list we currently have data based on DSR_HEADERS size (index 946)
+                    # We need to map Shakti source data to the current headers_to_use
+                    m_row = [None] * len(headers_to_use)
+                    for z_h, m_h in zoho_map.items():
+                        if z_h in h_map:
+                            val = shakti_vals[h_map[z_h]]
+                            if m_h in date_master_headers:
+                                val = self._clean_date(val)
+                            
+                            # Vessel ETA twice for CLC (and number conversion for others)
+                            val = self._clean_numeric(val, m_h)
+                            
+                            indices = [i for i, h in enumerate(headers_to_use) if h == m_h]
+                            for idx in indices:
+                                m_row[idx] = val
+                    
+                    # Special cases for CHA JOB NO mapping which might be duplicate
+                    if "CHA Job No." in h_map:
+                        val = shakti_vals[h_map["CHA Job No."]]
+                        if "CHA JOB NO" in master_h_to_idx:
+                            m_row[master_h_to_idx["CHA JOB NO"]] = val
+                            
+                    user_rows_final.append(m_row)
+
+                wb_out: openpyxl.Workbook
+                template_path = SCRIPT_DIR / "Copy of 13-04-26 - CLC.xlsx"
+                if not template_path.exists():
+                    template_path = SCRIPT_DIR / "new clc" / "Copy of 13-04-26 - CLC.xlsx"
+
+                if user == "CLC / After sales" and template_path.exists():
+                    try:
+                        wb_out = openpyxl.load_workbook(template_path)
+                        # Prepare Live/Cleared sheets - clear old data but keep headers
+                        for s_name in ["Live shipments", "Cleared shipments"]:
+                            if s_name in wb_out.sheetnames:
+                                ws_temp = wb_out[s_name]
+                                if ws_temp.max_row > 1:
+                                    ws_temp.delete_rows(2, ws_temp.max_row - 1)
+                            else:
+                                wb_out.create_sheet(s_name)
+                        ws_live = wb_out["Live shipments"]
+                        ws_cleared = wb_out["Cleared shipments"]
+                        
+                        # Ensure headers match our expected headers_to_use
+                        # (This ensures the columns align with our mapping logic)
+                        if ws_live.max_row == 0 or not ws_live[1][0].value:
+                            ws_live.append(headers_to_use)
+                        if ws_cleared.max_row == 0 or not ws_cleared[1][0].value:
+                            ws_cleared.append(headers_to_use)
+                            
+                    except Exception as te:
+                        logger.warning(f"Could not load CLC template: {te}")
+                        wb_out = openpyxl.Workbook()
+                        ws_live = wb_out.active
+                        ws_live.title = "Live shipments"
+                        ws_cleared = wb_out.create_sheet("Cleared shipments")
+                        ws_live.append(headers_to_use)
+                        ws_cleared.append(headers_to_use)
+                else:
+                    wb_out = openpyxl.Workbook()
+                    ws_live = wb_out.active
+                    ws_live.title = "Live shipments"
+                    ws_cleared = wb_out.create_sheet("Cleared shipments")
+                    # Headers
+                    ws_live.append(headers_to_use)
+                    ws_cleared.append(headers_to_use)
                 
                 # Data Distribution
                 dispatch_date_idx = master_h_to_idx.get("Dispatch date to plant/WH", -1)
                 
-                for r in rows:
+                for r in user_rows_final:
                     is_cleared = False
                     if dispatch_date_idx != -1:
                         d_val = r[dispatch_date_idx]
@@ -980,8 +1104,8 @@ class DSRGeneratorApp:
                     else:
                         ws_live.append(r)
                 
-                self._apply_dsr_styling(ws_live)
-                self._apply_dsr_styling(ws_cleared)
+                self._apply_dsr_styling(ws_live, headers_to_use)
+                self._apply_dsr_styling(ws_cleared, headers_to_use)
                 
                 wb_out.save(fpath)
                 generated.append(fname)
@@ -1632,44 +1756,100 @@ class DSRGeneratorApp:
                 continue
         return date_str
 
-    def _record_to_row(self, rec: ContainerRecord) -> list:
-        row = [""] * len(DSR_HEADERS)
-        
-        row[0] = rec.user
-        row[1] = self._clean_date(rec.pre_alert_date)
-        row[2] = rec.user_month
-        row[3] = rec.shipping_line
-        row[4] = rec.port_of_loading
-        row[5] = rec.vessel_name
-
-        row[6] = self._clean_date(rec.bl_date)
-        row[7] = self._clean_date(rec.vessel_eta)
-        row[9] = rec.container_no
-        row[10] = rec.container_size
-        row[11] = rec.container_type
-        
-        # BL No Column (N) - Combined Pattern (MBL/HBL) as requested
-        mbl_formatted = self._format_bl_number(rec.mbl_no)
-        hbl_formatted = self._format_bl_number(rec.hbl_no)
-
-        if mbl_formatted and hbl_formatted:
-            row[13] = f"{mbl_formatted}/{hbl_formatted}"
-        else:
-            row[13] = self._format_bl_number(rec.bl_no) # Fallback to general bl_no, also formatted
+    def _clean_numeric(self, val, header_name: str):
+        """Converts specific columns to numbers if they contain only digits."""
+        # Columns to convert:
+        # Size (20'40' LCL), Invoice No., BL No., IGM No., B/E No, Clearnace TAT
+        target_headers = {
+            "Size (20'40' LCL)", "Invoice No.", "BL No.", 
+            "IGM No.", "B/E No", "Clearnace TAT"
+        }
+        if header_name not in target_headers:
+            return val
             
-        row[14] = rec.supplier_name
-        row[15] = rec.invoice_nos
-        row[16] = rec.inco_terms
+        if val is None or val == "":
+            return None
+        
+        s_val = str(val).strip()
+        if not s_val:
+            return None
+            
+        # BL No and Invoice No: cells which has only nos. (No symbols like / or -)
+        if header_name in ["BL No.", "Invoice No."]:
+            if s_val.isdigit():
+                return int(s_val)
+            return s_val
+            
+        # Size (20'40' LCL) - except 'LCL'
+        if header_name == "Size (20'40' LCL)":
+            if s_val.isdigit():
+                return int(s_val)
+            return s_val
+            
+        # Others (IGM No., B/E No, Clearnace TAT)
+        if s_val.isdigit():
+            return int(s_val)
+        
+        # Try float for TAT if it's like 5.0
+        try:
+            if re.match(r"^\d+\.\d+$", s_val):
+                return float(s_val)
+        except:
+            pass
+            
+        return s_val
 
-        try: row[17] = int(rec.num_packages)
-        except: row[17] = rec.num_packages
+    def _record_to_row(self, rec: ContainerRecord, headers_to_use: list[str]) -> list:
+        row = [None] * len(headers_to_use)
+        h_idx = {h: i for i, h in enumerate(headers_to_use) if h}
+        
+        # Basic mapping
+        mapping = {
+            "User": rec.user,
+            "Pre-alert Receive date": self._clean_date(rec.pre_alert_date),
+            "Month": rec.user_month,
+            "FF/ Shipping Line": rec.shipping_line,
+            "Port of Loading": rec.port_of_loading,
+            "Vessel Name": rec.vessel_name,
+            "BL Date": self._clean_date(rec.bl_date),
+            "Vessel ETA": self._clean_date(rec.vessel_eta),
+            "Container No.": rec.container_no,
+            "Size (20'40' LCL)": rec.container_size,
+            "Container Type (HQ,DV,SD)": rec.container_type,
+            "Supplier Name": rec.supplier_name,
+            "Invoice No.": rec.invoice_nos,
+            "INCO": rec.inco_terms,
+            "No.of Pkg.": rec.num_packages,
+            "GrossWt": rec.gross_weight,
+        }
 
-        try: row[18] = float(rec.gross_weight)
-        except: row[18] = rec.gross_weight
+        # Handle BL No Column (N) - Combined Pattern (MBL/HBL)
+        mbl_f = self._format_bl_number(rec.mbl_no)
+        hbl_f = self._format_bl_number(rec.hbl_no)
+        bl_val = f"{mbl_f}/{hbl_f}" if mbl_f and hbl_f else self._format_bl_number(rec.bl_no)
+        mapping["BL No."] = bl_val
+
+        for h, val in mapping.items():
+            if h in h_idx:
+                # Apply numeric cleaning
+                final_val = self._clean_numeric(val, h)
+                
+                # Special cases for Package and Weight (already set in mapping but maybe raw)
+                if h == "No.of Pkg.":
+                    try: final_val = int(val)
+                    except: final_val = val
+                elif h == "GrossWt":
+                    try: final_val = float(val)
+                    except: final_val = val
+                
+                # Assign to all indices for this header (e.g. Vessel ETA twice)
+                indices = [i for i, head in enumerate(headers_to_use) if head == h]
+                for idx in indices:
+                    row[idx] = final_val
 
         return row
 
-    def _apply_dsr_styling(self, ws: Worksheet) -> None:
+    def _apply_dsr_styling(self, ws: Worksheet, headers: list[str]) -> None:
         """Applies NAGARKOT styling to the DSR sheet."""
         header_font = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF")
         header_fill = PatternFill("solid", fgColor="1B3A5C")
@@ -1678,8 +1858,10 @@ class DSRGeneratorApp:
         data_font = Font(name="Segoe UI", size=9)
         data_align = Alignment(vertical="center", wrap_text=False)
 
+        num_cols = len(headers)
+
         # Style header
-        for col_idx, _ in enumerate(DSR_HEADERS, 1):
+        for col_idx in range(1, num_cols + 1):
             cell = ws.cell(row=1, column=col_idx)
             cell.font = header_font
             cell.fill = header_fill
@@ -1689,18 +1871,17 @@ class DSRGeneratorApp:
         ws.row_dimensions[1].height = 40
         ws.freeze_panes = "A2"
 
-        # Style data rows
-        # Explicit list of date columns (must match DSR_HEADERS exactly)
+        # Explicit list of date columns
         date_header_names = {
             "Pre-alert Receive date", "BL Date", "Vessel ETA",
             "IGM No. Date", "IGM Inward Date", "B/E Date",
             "Duty Request recd from CHA", "Duty Paid date",
             "OOC Date", "Dispatch date to plant/WH",
             "STAMP DUTY PAID DT", "Conatainer arrival date in CFS",
-            "SIMS Registration date",
+            "SIMS Registration date", "Checklist Recd date", "Checklist Approved date",
         }
         date_col_indices = [
-            i for i, h in enumerate(DSR_HEADERS, 1) if h in date_header_names
+            i for i, h in enumerate(headers, 1) if h in date_header_names
         ]
 
         for row in ws.iter_rows(min_row=2):
@@ -1714,7 +1895,7 @@ class DSRGeneratorApp:
                     cell.number_format = "DD-MM-YYYY"
 
         # Auto-width
-        for col_idx in range(1, len(DSR_HEADERS) + 1):
+        for col_idx in range(1, num_cols + 1):
             col_letter = openpyxl.utils.get_column_letter(col_idx)
             ws.column_dimensions[col_letter].width = 15
 
@@ -1723,10 +1904,13 @@ class DSRGeneratorApp:
         sheet_name = next((n for n in ["Live shipments", "DSR"] if n in wb.sheetnames), wb.sheetnames[0])
         ws = wb[sheet_name]
         
-        for rec in records:
-            ws.append(self._record_to_row(rec))
+        # Detect headers from master
+        headers = [str(cell.value) for cell in ws[1]]
         
-        self._apply_dsr_styling(ws)
+        for rec in records:
+            ws.append(self._record_to_row(rec, headers))
+        
+        self._apply_dsr_styling(ws, headers)
         wb.save(path)
         wb.close()
 
@@ -1734,17 +1918,20 @@ class DSRGeneratorApp:
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Live shipments"
-        ws.append(DSR_HEADERS)
+        
+        # Default to standard DSR_HEADERS for master
+        headers = DSR_HEADERS
+        ws.append(headers)
         
         for rec in records:
-            ws.append(self._record_to_row(rec))
+            ws.append(self._record_to_row(rec, headers))
             
-        self._apply_dsr_styling(ws)
+        self._apply_dsr_styling(ws, headers)
         # Create second sheet empty as per original code pattern
         cleared = wb.create_sheet("Cleared shipments")
         # Apply header to second sheet too
-        cleared.append(DSR_HEADERS)
-        self._apply_dsr_styling(cleared)
+        cleared.append(headers)
+        self._apply_dsr_styling(cleared, headers)
 
         wb.save(save_path)
         wb.close()
