@@ -434,6 +434,25 @@ class DataPreviewWindow(tk.Toplevel):
             rec_idx = self.tree.index(row_id)
             attr_name = self.col_map[col_idx][0]
             setattr(self.records[rec_idx], attr_name, new_val)
+            
+            # If the user edits BL No manually, we must propagate it so Zoho and Excel use the updated values
+            if attr_name == "bl_no":
+                 old_raw = self.records[rec_idx].raw_mbl_no or ""
+                 parts = new_val.split("/")
+                 mbl_part = parts[0].strip() if len(parts) > 0 else ""
+                 
+                 # Logic for raw_mbl_no: if original was Maersk, ensure prefix prefix is attached
+                 if old_raw.upper().startswith("MAEU") and not mbl_part.upper().startswith("MAEU"):
+                     self.records[rec_idx].raw_mbl_no = f"MAEU{mbl_part}"
+                 else:
+                     self.records[rec_idx].raw_mbl_no = mbl_part
+
+                 # Also update secondary storage fields so Excel logic works correctly
+                 self.records[rec_idx].mbl_no = mbl_part 
+                 self.records[rec_idx].hbl_no = parts[1].strip() if len(parts) > 1 else ""
+                 # Refresh bl_no again in case prefix logic changed
+                 self.records[rec_idx].bl_no = new_val
+                 
             entry.destroy()
             
         entry.bind("<Return>", commit)
@@ -1463,7 +1482,24 @@ class DSRGeneratorApp:
         """Called after user finishes editing/confirming in the Review window."""
         self.confirmed_records = list(self.parsed_records)
         self.btn_push.config(state="normal", cursor="hand2")
+        
+        # Refresh the main GUI treeview to show any manual edits made
+        self._refresh_treeview()
+        
         messagebox.showinfo("Ready", "Data confirmed! You can now click '2. Push to Shakti & Export'.")
+
+    def _refresh_treeview(self) -> None:
+        """Updates the main GUI treeview to reflect manual edits made in the Review window."""
+        # For simplicity, we just aggregate all currently parsed BL Nos 
+        # and update the BL No column in all existing rows.
+        all_bls = list(dict.fromkeys(self._format_bl_number(r.bl_no) for r in self.parsed_records if r.bl_no))
+        bl_str = ", ".join(all_bls)
+        
+        for item in self.tree.get_children():
+            vals = list(self.tree.item(item, "values"))
+            if len(vals) >= 6:
+                vals[5] = bl_str
+                self.tree.item(item, values=vals)
 
     def _get_existing_invoices(self) -> set[tuple[str, str]]:
         """Reads the local Master DSR and returns a set of (Container No, Invoice No) tuples."""
