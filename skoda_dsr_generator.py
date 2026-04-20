@@ -121,7 +121,7 @@ DSR_HEADERS: list[str] = [
     "Under Protest",                  # AZ
     "BOE filing TAT",                 # BA
     "Reason for BOE filing TAT delay",# BB
-    "Conatainer arrival date in CFS", # BC
+    "Container arrival date in CFS", # BC
     "OOC COPY RECD YES/NO",           # BD
     "Remarks",                        # BE
     "SIMS Registration date",         # BF
@@ -189,7 +189,7 @@ CLC_DSR_HEADERS: list[str | None] = [
     "BOE filing TAT",                 # BG
     "Reason for Clearance TAT delay", # BH
     "Reason for BOE filing TAT delay",# BI
-    "Conatainer arrival date in CFS", # BJ
+    "Container arrival date in CFS", # BJ
 ]
 
 MONTH_MAP = {
@@ -908,7 +908,6 @@ class DSRGeneratorApp:
                 "Vessel ETA": "Vessel ETA",
                 "BL No.": "BL No.",
                 "CHA Job No.": "CHA Job No.",
-                "Current Status": "Current Status",
                 "Supplier Name": "Supplier Name",
                 "INCO": "INCO",
                 "CFS Name": "CFS Name",
@@ -942,12 +941,13 @@ class DSRGeneratorApp:
                 "Under Protest": "Under Protest",
                 "BOE filing TAT": "BOE filing TAT",
                 "Reason for BOE filing TAT Delay": "Reason for BOE filing TAT delay",
-                "Container arrival date in CFS": "Conatainer arrival date in CFS",
                 "OOC COPY RECD YES/NO": "OOC COPY RECD YES/NO",
                 "SIMS Registration date": "SIMS Registration date",
                 "Remarks": "Remarks",
                 "Container Details - Skoda Container No": "Container No.",
+                "Container Details - Container arrival date in CFS": "Container arrival date in CFS",
                 "Container Details - Container Size": "Size (20'40' LCL)",
+                "Container Details - Container Status": "Current Status",
                 "Container Details - Container Type": "Container Type (HQ,DV,SD)",
                 "Container Details - Gross Wt": "GrossWt",
                 "Container Details - No of Pkgs": "No.of Pkg.",
@@ -1015,7 +1015,7 @@ class DSRGeneratorApp:
                     "IGM No. Date", "IGM Inward Date", "B/E Date",
                     "Duty Request recd from CHA", "Duty Paid date",
                     "OOC Date", "Dispatch date to plant/WH",
-                    "STAMP DUTY PAID DT", "Conatainer arrival date in CFS",
+                    "STAMP DUTY PAID DT", "Container arrival date in CFS",
                     "SIMS Registration date", "Checklist Recd date", "Checklist Approved date",
                 }
                 
@@ -1047,9 +1047,12 @@ class DSRGeneratorApp:
                     user_rows_final.append(m_row)
 
                 wb_out: openpyxl.Workbook
+                # First check next to script/exe, then subfolder, then PyInstaller resource
                 template_path = SCRIPT_DIR / "Copy of 13-04-26 - CLC.xlsx"
                 if not template_path.exists():
                     template_path = SCRIPT_DIR / "new clc" / "Copy of 13-04-26 - CLC.xlsx"
+                if not template_path.exists():
+                    template_path = resource_path("Copy of 13-04-26 - CLC.xlsx")
 
                 if user == "CLC / After sales" and template_path.exists():
                     try:
@@ -1877,7 +1880,7 @@ class DSRGeneratorApp:
             "IGM No. Date", "IGM Inward Date", "B/E Date",
             "Duty Request recd from CHA", "Duty Paid date",
             "OOC Date", "Dispatch date to plant/WH",
-            "STAMP DUTY PAID DT", "Conatainer arrival date in CFS",
+            "STAMP DUTY PAID DT", "Container arrival date in CFS",
             "SIMS Registration date", "Checklist Recd date", "Checklist Approved date",
         }
         date_col_indices = [
